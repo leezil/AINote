@@ -15,10 +15,16 @@ import type { AskRequest } from "@/lib/ai/ask-schema";
 import { inferPdfMaterialIntentFromQuestion } from "@/lib/ai/scope-intent";
 import { InkOverlay, type InkOverlayHandle, type ZoomPanTouchBridge } from "@/components/ink/InkOverlay";
 import { ZoomPanSurface } from "@/components/workspace/ZoomPanSurface";
+import { useI18n } from "@/lib/i18n/LocaleProvider";
+
+function PdfViewerLoading() {
+  const { t } = useI18n();
+  return <p className="p-4 text-sm text-zinc-500">{t("pdfViewer.loading")}</p>;
+}
 
 const PdfClientView = dynamic(
   () => import("@/components/pdf/PdfClientView").then((m) => m.PdfClientView),
-  { ssr: false, loading: () => <p className="p-4 text-sm text-zinc-500">PDF 뷰어 로딩…</p> },
+  { ssr: false, loading: PdfViewerLoading },
 );
 
 const defaultWorkspaceId =
@@ -39,6 +45,7 @@ type AiPanelSide = "left" | "right";
 type AiLandscapeStack = "bottom" | "top";
 
 export function WorkspaceApp() {
+  const { t, translateError } = useI18n();
   const [documents, setDocuments] = useState<StoredDocumentMeta[]>([]);
   const [openTabs, setOpenTabs] = useState<string[]>([]);
   const [activeId, setActiveId] = useState<string | null>(null);
@@ -372,7 +379,11 @@ export function WorkspaceApp() {
     });
     if (!res.ok) {
       const err = await res.json().catch(() => ({}));
-      setError(typeof err.error === "string" ? err.error : "업로드 실패");
+      setError(
+        translateError(
+          typeof err.error === "string" ? err.error : t("workspace.errUploadFailed"),
+        ),
+      );
       return;
     }
     const data = (await res.json()) as { document: StoredDocumentMeta };
@@ -393,7 +404,7 @@ export function WorkspaceApp() {
 
   const captureViewportJpeg = async (): Promise<string> => {
     const node = captureRef.current;
-    if (!node) throw new Error("캡처 영역이 준비되지 않았습니다.");
+    if (!node) throw new Error(t("workspace.errCaptureNotReady"));
     return await toJpeg(node, {
       quality: 0.84,
       pixelRatio: Math.min(window.devicePixelRatio || 1, 1.6),
@@ -406,11 +417,11 @@ export function WorkspaceApp() {
     setAnswer(null);
     const q = question.trim();
     if (!q) {
-      setError("질문을 입력하세요.");
+      setError(t("workspace.errEnterQuestion"));
       return;
     }
     if (!activeMeta) {
-      setError("문서를 선택하세요.");
+      setError(t("workspace.errSelectDoc"));
       return;
     }
 
@@ -486,12 +497,18 @@ export function WorkspaceApp() {
       });
       const payload = await res.json().catch(() => ({}));
       if (!res.ok) {
-        setError(typeof payload.error === "string" ? payload.error : "AI 요청 실패");
+        setError(
+          translateError(
+            typeof payload.error === "string" ? payload.error : t("workspace.errAiFailed"),
+          ),
+        );
         return;
       }
       setAnswer(typeof payload.answer === "string" ? payload.answer : "");
     } catch (err) {
-      setError(err instanceof Error ? err.message : "오류");
+      setError(
+        translateError(err instanceof Error ? err.message : t("workspace.errGeneric")),
+      );
     } finally {
       setBusy(false);
     }
@@ -521,14 +538,14 @@ export function WorkspaceApp() {
         ].join(" ")}
       >
         <div className="rounded-xl border border-zinc-200 bg-white p-3 shadow-sm dark:border-zinc-800 dark:bg-zinc-950">
-          <p className="text-xs font-medium text-zinc-500">자료</p>
+          <p className="text-xs font-medium text-zinc-500">{t("workspace.materials")}</p>
           <label className="mt-2 flex cursor-pointer items-center justify-center rounded-lg border border-dashed border-zinc-300 bg-zinc-50 px-2 py-3 text-sm text-zinc-700 hover:bg-zinc-100 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-200 dark:hover:bg-zinc-800">
             <input type="file" className="hidden" accept=".pdf,image/*,.txt" onChange={onUpload} />
-            업로드 (PDF / 이미지 / txt)
+            {t("workspace.upload")}
           </label>
         </div>
         <div className="rounded-xl border border-zinc-200 bg-white p-2 shadow-sm dark:border-zinc-800 dark:bg-zinc-950">
-          <p className="px-2 pb-1 text-xs font-medium text-zinc-500">저장된 문서</p>
+          <p className="px-2 pb-1 text-xs font-medium text-zinc-500">{t("workspace.savedDocs")}</p>
           <ul className="max-h-40 space-y-1 overflow-auto text-sm">
             {documents.map((d) => (
               <li key={d.id}>
@@ -542,13 +559,13 @@ export function WorkspaceApp() {
               </li>
             ))}
             {documents.length === 0 ? (
-              <li className="px-2 py-2 text-zinc-500">없음</li>
+              <li className="px-2 py-2 text-zinc-500">{t("workspace.none")}</li>
             ) : null}
           </ul>
         </div>
 
         <div className="rounded-xl border border-zinc-200 bg-white p-2 shadow-sm dark:border-zinc-800 dark:bg-zinc-950">
-          <p className="px-2 pb-1 text-xs font-medium text-zinc-500">열린 탭</p>
+          <p className="px-2 pb-1 text-xs font-medium text-zinc-500">{t("workspace.openTabs")}</p>
           <ul className="max-h-48 space-y-1 overflow-auto md:max-h-[28rem]">
             {openTabs.map((id) => {
               const meta = documents.find((d) => d.id === id);
@@ -570,7 +587,7 @@ export function WorkspaceApp() {
               );
             })}
             {openTabs.length === 0 ? (
-              <li className="px-2 py-2 text-sm text-zinc-500">문서를 업로드하세요.</li>
+              <li className="px-2 py-2 text-sm text-zinc-500">{t("workspace.uploadFirst")}</li>
             ) : null}
           </ul>
         </div>
@@ -581,7 +598,7 @@ export function WorkspaceApp() {
           "flex min-h-0 min-w-0 flex-1",
           viewerFullscreen
             ? [
-                "fixed inset-0 z-50 m-0 h-[100dvh] max-w-none flex-col bg-white p-0 dark:bg-zinc-950",
+                "fixed inset-0 z-50 m-0 h-[100dvh] max-w-none overflow-hidden flex-col bg-white p-0 dark:bg-zinc-950",
                 isMdUp && aiLayoutHorizontalSplit ? "md:flex-row md:gap-0" : "",
               ].join(" ")
             : "flex-col gap-3",
@@ -604,7 +621,7 @@ export function WorkspaceApp() {
               : "flex-1 rounded-xl",
           ].join(" ")}
         >
-          <header className="flex flex-wrap items-center gap-2 border-b border-zinc-100 px-3 py-2 dark:border-zinc-800">
+          <header className="relative z-30 flex shrink-0 flex-wrap items-center gap-2 border-b border-zinc-100 bg-white px-3 py-2 dark:border-zinc-800 dark:bg-zinc-950">
             {activeMeta?.kind === "pdf" ? (
               <>
                 <button
@@ -612,7 +629,7 @@ export function WorkspaceApp() {
                   className="rounded-md border border-zinc-200 px-2 py-1 text-sm dark:border-zinc-700"
                   onClick={() => setPage(Math.max(1, currentPage - 1))}
                 >
-                  이전
+                  {t("workspace.prev")}
                 </button>
                 <span className="text-sm text-zinc-600 dark:text-zinc-300">
                   {currentPage} / {pdfPageTotal}
@@ -624,12 +641,12 @@ export function WorkspaceApp() {
                     setPage(Math.min(pdfPageTotal, currentPage + 1))
                   }
                 >
-                  다음
+                  {t("workspace.next")}
                 </button>
               </>
             ) : (
               <span className="text-sm text-zinc-600 dark:text-zinc-300">
-                {activeMeta?.filename ?? "문서 없음"}
+                {activeMeta?.filename ?? t("workspace.noDocument")}
               </span>
             )}
             <div className="ml-auto flex flex-wrap items-center justify-end gap-2">
@@ -643,7 +660,7 @@ export function WorkspaceApp() {
                 ].join(" ")}
                 onClick={() => setPenTool("ink")}
               >
-                필기
+                {t("workspace.ink")}
               </button>
               <button
                 type="button"
@@ -655,22 +672,22 @@ export function WorkspaceApp() {
                 ].join(" ")}
                 onClick={() => setPenTool("erase")}
               >
-                지우개
+                {t("workspace.erase")}
               </button>
               {inkLayerActive ? (
                 <span className="flex flex-wrap items-center gap-1.5">
                   <label className="flex items-center gap-1 text-xs text-zinc-600 dark:text-zinc-400">
-                    색
+                    {t("workspace.color")}
                     <input
                       type="color"
                       value={inkColor}
                       onChange={(e) => setInkColor(e.target.value)}
                       className="h-7 w-8 cursor-pointer rounded border border-zinc-300 bg-white p-0 dark:border-zinc-600"
-                      title="펜 색"
+                      title={t("workspace.penColorTitle")}
                     />
                   </label>
                   <label className="flex items-center gap-1 text-xs text-zinc-600 dark:text-zinc-400">
-                    굵기
+                    {t("workspace.width")}
                     <input
                       type="range"
                       min={1}
@@ -679,12 +696,12 @@ export function WorkspaceApp() {
                       value={inkWidth}
                       onChange={(e) => setInkWidth(Number(e.target.value))}
                       className="w-20"
-                      title="펜 굵기"
+                      title={t("workspace.penWidthTitle")}
                     />
                   </label>
                   {penTool === "erase" ? (
                     <label className="flex items-center gap-1 text-xs text-zinc-600 dark:text-zinc-400">
-                      지우개
+                      {t("workspace.erase")}
                       <input
                         type="range"
                         min={4}
@@ -693,7 +710,7 @@ export function WorkspaceApp() {
                         value={eraserRadius}
                         onChange={(e) => setEraserRadius(Number(e.target.value))}
                         className="w-20"
-                        title="지우개 크기"
+                        title={t("workspace.eraserSizeTitle")}
                       />
                     </label>
                   ) : null}
@@ -704,7 +721,7 @@ export function WorkspaceApp() {
                 className="rounded-md border border-zinc-200 px-2 py-1 text-sm dark:border-zinc-700"
                 onClick={() => inkRef.current?.clear()}
               >
-                전체 지우기
+                {t("workspace.clearAllInk")}
               </button>
               {viewerFullscreen ? (
                 fullscreenAiOpen ? (
@@ -713,7 +730,7 @@ export function WorkspaceApp() {
                     className="rounded-md border border-zinc-200 px-2 py-1 text-sm dark:border-zinc-700"
                     onClick={() => setFullscreenAiOpen(false)}
                   >
-                    AI 숨기기
+                    {t("workspace.aiHide")}
                   </button>
                 ) : (
                   <button
@@ -721,7 +738,7 @@ export function WorkspaceApp() {
                     className="rounded-md border border-zinc-200 px-2 py-1 text-sm dark:border-zinc-700"
                     onClick={() => setFullscreenAiOpen(true)}
                   >
-                    AI 열기
+                    {t("workspace.aiShow")}
                   </button>
                 )
               ) : null}
@@ -730,19 +747,19 @@ export function WorkspaceApp() {
                 className="rounded-md border border-zinc-200 px-2 py-1 text-sm dark:border-zinc-700"
                 onClick={() => setViewerFullscreen((v) => !v)}
               >
-                {viewerFullscreen ? "전체화면 끄기" : "전체화면"}
+                {viewerFullscreen ? t("workspace.fullscreenExit") : t("workspace.fullscreenEnter")}
               </button>
             </div>
           </header>
 
           <div
             className={[
-              "relative bg-zinc-50 dark:bg-zinc-900/40",
+              "relative isolate z-0 bg-zinc-50 dark:bg-zinc-900/40",
               viewerFullscreen ? "min-h-0 flex-1 overflow-hidden" : "min-h-[320px] flex-1 overflow-auto",
             ].join(" ")}
           >
             {!activeMeta ? (
-              <p className="p-6 text-sm text-zinc-500">왼쪽에서 파일을 업로드하고 탭을 선택하세요.</p>
+              <p className="p-6 text-sm text-zinc-500">{t("workspace.pickDocHint")}</p>
             ) : (
               <ZoomPanSurface
                 key={viewerFullscreen ? "zoom-fs" : "zoom-win"}
@@ -751,7 +768,7 @@ export function WorkspaceApp() {
                 initialScale={viewerFullscreen ? zoomScaleFs : zoomScaleWin}
                 onScaleChange={handleViewerScaleChange}
                 touchBridgeRef={touchPanBridgeRef}
-                stretchContent={viewerFullscreen && inkLayerActive}
+                stretchContent={false}
                 viewResetKey={activeMeta ? activeMeta.id : "none"}
                 panResetKey={
                   activeMeta
@@ -765,11 +782,9 @@ export function WorkspaceApp() {
                   ref={captureRef}
                   className={[
                     "relative mx-auto max-w-full",
-                    viewerFullscreen && inkLayerActive
-                      ? "flex h-full min-h-0 w-full flex-1 flex-col"
-                      : viewerFullscreen
-                        ? "min-h-0 w-full"
-                        : "min-h-[480px] w-max",
+                    viewerFullscreen
+                      ? "flex h-full min-h-0 w-max max-w-full flex-col"
+                      : "min-h-[480px] w-max",
                   ].join(" ")}
                 >
                   {activeMeta.kind === "pdf" ? (
@@ -840,7 +855,7 @@ export function WorkspaceApp() {
         {viewerFullscreen && fullscreenAiOpen && isMdUp ? (
           <div
             role="separator"
-            aria-label={aiLayoutVerticalStack ? "AI 패널 높이 조절" : "AI 패널 너비 조절"}
+            aria-label={aiLayoutVerticalStack ? t("workspace.resizeAiHeight") : t("workspace.resizeAiWidth")}
             aria-orientation={aiLayoutVerticalStack ? "horizontal" : "vertical"}
             className={[
               "relative z-20 shrink-0 touch-none select-none bg-zinc-200 hover:bg-zinc-400 dark:bg-zinc-700 dark:hover:bg-zinc-500",
@@ -903,7 +918,7 @@ export function WorkspaceApp() {
         >
           <div className="mb-2 flex min-w-0 flex-wrap items-start justify-between gap-2 md:mb-3">
             <p className="min-w-0 flex-1 text-sm font-medium text-zinc-800 dark:text-zinc-100">
-              AI 질문 (버튼을 누를 때만 호출)
+              {t("workspace.aiAskTitle")}
             </p>
             {viewerFullscreen && isMdUp ? (
               <div className="flex shrink-0 flex-wrap justify-end gap-1">
@@ -922,7 +937,7 @@ export function WorkspaceApp() {
                         saveAiLayoutToStorage(undefined, { stack: "bottom" });
                       }}
                     >
-                      AI 하단
+                      {t("workspace.aiBottom")}
                     </button>
                     <button
                       type="button"
@@ -937,7 +952,7 @@ export function WorkspaceApp() {
                         saveAiLayoutToStorage(undefined, { stack: "top" });
                       }}
                     >
-                      AI 상단
+                      {t("workspace.aiTop")}
                     </button>
                   </>
                 ) : (
@@ -955,7 +970,7 @@ export function WorkspaceApp() {
                         saveAiLayoutToStorage(undefined, { side: "right" });
                       }}
                     >
-                      AI 오른쪽
+                      {t("workspace.aiRight")}
                     </button>
                     <button
                       type="button"
@@ -970,7 +985,7 @@ export function WorkspaceApp() {
                         saveAiLayoutToStorage(undefined, { side: "left" });
                       }}
                     >
-                      AI 왼쪽
+                      {t("workspace.aiLeft")}
                     </button>
                   </>
                 )}
@@ -979,16 +994,7 @@ export function WorkspaceApp() {
           </div>
           {activeMeta?.kind === "pdf" ? (
             <fieldset className="mt-2 space-y-1 text-sm text-zinc-700 dark:text-zinc-300">
-              <p className="text-xs text-zinc-500">
-                「자동」: 질문에 &quot;전체 요약&quot;·&quot;모든 페이지&quot; 등이 있으면 문서 전체 텍스트,
-                &quot;현재 페이지&quot;·&quot;이 화면&quot; 등이 있으면 보고 있는 페이지만 전달합니다. (둘 다 없으면
-                현재 페이지) 교재처럼 <strong className="font-medium text-zinc-600 dark:text-zinc-400">스캔 PDF</strong>
-                는 텍스트 레이어가 없어 추출이 비는 경우가 많습니다. 그때는 아래{' '}
-                <strong className="font-medium text-zinc-600 dark:text-zinc-400">
-                  화면 캡처 포함
-                </strong>
-                모드를 쓰면 이미지로 문제를 보낼 수 있습니다.
-              </p>
+              <p className="text-xs text-zinc-500">{t("workspace.pdfScopeHint")}</p>
               <label className="flex cursor-pointer items-center gap-2">
                 <input
                   type="radio"
@@ -996,7 +1002,7 @@ export function WorkspaceApp() {
                   checked={pdfAskMode === "auto_material"}
                   onChange={() => setPdfAskMode("auto_material")}
                 />
-                자동 (질문 문구로 현재 페이지 vs 전체 판별)
+                {t("workspace.pdfScopeAuto")}
               </label>
               <label className="flex cursor-pointer items-center gap-2">
                 <input
@@ -1005,7 +1011,7 @@ export function WorkspaceApp() {
                   checked={pdfAskMode === "force_current_page"}
                   onChange={() => setPdfAskMode("force_current_page")}
                 />
-                강제: 지금 보는 페이지 텍스트만
+                {t("workspace.pdfScopeForcePage")}
               </label>
               <label className="flex cursor-pointer items-center gap-2">
                 <input
@@ -1014,7 +1020,7 @@ export function WorkspaceApp() {
                   checked={pdfAskMode === "force_full_document"}
                   onChange={() => setPdfAskMode("force_full_document")}
                 />
-                강제: PDF 전체 텍스트 (길면 서버에서 잘림)
+                {t("workspace.pdfScopeForceFull")}
               </label>
               <label className="flex cursor-pointer items-center gap-2">
                 <input
@@ -1023,7 +1029,7 @@ export function WorkspaceApp() {
                   checked={pdfAskMode === "current_page_plus_capture"}
                   onChange={() => setPdfAskMode("current_page_plus_capture")}
                 />
-                현재 페이지 텍스트 + 화면 캡처 (필기·도표)
+                {t("workspace.pdfScopePagePlusCapture")}
               </label>
               <label className="flex cursor-pointer items-center gap-2">
                 <input
@@ -1032,23 +1038,23 @@ export function WorkspaceApp() {
                   checked={pdfAskMode === "capture_only"}
                   onChange={() => setPdfAskMode("capture_only")}
                 />
-                화면 캡처만 (이미지로 질문)
+                {t("workspace.pdfScopeCaptureOnly")}
               </label>
             </fieldset>
           ) : activeMeta?.kind === "image" ? (
             <p className="mt-2 text-sm text-zinc-600 dark:text-zinc-400">
-              범위: 업로드한 이미지 파일 전체를 서버가 Gemini에 전달합니다. (표·손글씨·사진 인식 가능)
+              {t("workspace.imageScopeHint")}
             </p>
           ) : activeMeta?.kind === "text" ? (
             <p className="mt-2 text-sm text-zinc-600 dark:text-zinc-400">
-              범위: 텍스트 파일 본문 (길면 서버에서 잘라 전달)
+              {t("workspace.textScopeHint")}
             </p>
           ) : null}
 
           <textarea
             className="mt-3 w-full rounded-lg border border-zinc-200 bg-white p-2 text-sm dark:border-zinc-700 dark:bg-zinc-950"
             rows={3}
-            placeholder='예: "현재 페이지" 정의만 정리해줘 / "전체 요약" 해줘'
+            placeholder={t("workspace.questionPlaceholder")}
             value={question}
             onChange={(e) => setQuestion(e.target.value)}
           />
@@ -1059,7 +1065,7 @@ export function WorkspaceApp() {
               onClick={() => void submitQuestion()}
               className="rounded-lg bg-zinc-900 px-4 py-2 text-sm font-medium text-white disabled:opacity-50 dark:bg-zinc-100 dark:text-zinc-900"
             >
-              {busy ? "처리 중…" : "질문 보내기"}
+              {busy ? t("workspace.sending") : t("workspace.sendQuestion")}
             </button>
           </div>
           {error ? (
@@ -1077,7 +1083,7 @@ export function WorkspaceApp() {
           <>
             <button
               type="button"
-              aria-label="AI 패널 열기"
+              aria-label={t("workspace.openAiPanel")}
               className={[
                 "fixed z-[60] rounded-full border border-zinc-300 bg-white px-4 py-2 text-sm font-medium text-zinc-800 shadow-md dark:border-zinc-600 dark:bg-zinc-900 dark:text-zinc-100",
                 aiLayoutVerticalStack
@@ -1086,11 +1092,11 @@ export function WorkspaceApp() {
               ].join(" ")}
               onClick={() => setFullscreenAiOpen(true)}
             >
-              AI 열기
+              {t("workspace.aiShow")}
             </button>
             <button
               type="button"
-              aria-label="AI 패널 열기"
+              aria-label={t("workspace.openAiPanel")}
               className={[
                 "fixed z-[60] rounded-l-lg border border-r-0 border-zinc-300 bg-white px-2 py-6 text-sm font-medium text-zinc-800 shadow-md dark:border-zinc-600 dark:bg-zinc-900 dark:text-zinc-100",
                 aiLayoutVerticalStack
@@ -1099,7 +1105,7 @@ export function WorkspaceApp() {
               ].join(" ")}
               onClick={() => setFullscreenAiOpen(true)}
             >
-              AI
+              {t("workspace.aiFab")}
             </button>
           </>
         ) : null}
@@ -1115,25 +1121,41 @@ function TextPreview({
   fileUrl: string;
   fetchHeaders: Record<string, string>;
 }) {
-  const [text, setText] = useState<string>("불러오는 중…");
+  const { t } = useI18n();
+  const [phase, setPhase] = useState<"loading" | "text" | "error">("loading");
+  const [body, setBody] = useState("");
+
   useEffect(() => {
     let cancelled = false;
+    setPhase("loading");
+    setBody("");
     void (async () => {
       try {
         const res = await fetch(fileUrl, { headers: fetchHeaders });
-        const t = await res.text();
-        if (!cancelled) setText(t);
+        const txt = await res.text();
+        if (!cancelled) {
+          setBody(txt);
+          setPhase("text");
+        }
       } catch {
-        if (!cancelled) setText("텍스트를 불러올 수 없습니다.");
+        if (!cancelled) setPhase("error");
       }
     })();
     return () => {
       cancelled = true;
     };
   }, [fileUrl, fetchHeaders]);
+
+  const display =
+    phase === "loading"
+      ? t("textPreview.loading")
+      : phase === "error"
+        ? t("textPreview.error")
+        : body;
+
   return (
     <pre className="max-h-[70vh] overflow-auto whitespace-pre-wrap break-words p-4 text-xs leading-relaxed text-zinc-800 dark:text-zinc-100">
-      {text}
+      {display}
     </pre>
   );
 }

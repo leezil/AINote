@@ -190,11 +190,23 @@ export const InkOverlay = forwardRef<InkOverlayHandle, Props>(function InkOverla
   const resizeToContainer = useCallback(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
-    const rect = canvas.getBoundingClientRect();
-    const cw = canvas.clientWidth;
-    const ch = canvas.clientHeight;
-    const w = Math.max(1, Math.round(cw > 0 ? cw : rect.width));
-    const h = Math.max(1, Math.round(ch > 0 ? ch : rect.height));
+    const parent = canvas.parentElement;
+    const pr = parent?.getBoundingClientRect();
+    const cw0 = canvas.clientWidth;
+    const ch0 = canvas.clientHeight;
+    /** absolute inset-0 등에서 캔버스 client*가 0인 프레임이 있으면 부모 박스로 측정 */
+    const w = Math.max(
+      1,
+      Math.round(
+        cw0 > 0 ? cw0 : pr && pr.width > 0 ? pr.width : canvas.getBoundingClientRect().width || 1,
+      ),
+    );
+    const h = Math.max(
+      1,
+      Math.round(
+        ch0 > 0 ? ch0 : pr && pr.height > 0 ? pr.height : canvas.getBoundingClientRect().height || 1,
+      ),
+    );
     const base = window.devicePixelRatio || 1;
     const dpr = Math.min(5, Math.max(1, base * Math.max(1, viewportScale)));
     const last = lastAllocRef.current;
@@ -264,15 +276,10 @@ export const InkOverlay = forwardRef<InkOverlayHandle, Props>(function InkOverla
     const canvas = canvasRef.current;
     if (!canvas) return { x: 0, y: 0 };
     const rect = canvas.getBoundingClientRect();
-    const cw = canvas.clientWidth;
-    const ch = canvas.clientHeight;
-    /** 조상의 CSS transform scale 등으로 rect(화면) 크기와 layout(client*)가 다를 때 보정 */
-    const sx = rect.width > 0 && cw > 0 ? cw / rect.width : 1;
-    const sy = rect.height > 0 && ch > 0 ? ch / rect.height : 1;
-    return {
-      x: (clientX - rect.left) * sx,
-      y: (clientY - rect.top) * sy,
-    };
+    const x = clientX - rect.left;
+    const y = clientY - rect.top;
+    if (!Number.isFinite(x) || !Number.isFinite(y)) return { x: 0, y: 0 };
+    return { x, y };
   }, []);
 
   function coalescedPointerMoves(
@@ -322,8 +329,7 @@ export const InkOverlay = forwardRef<InkOverlayHandle, Props>(function InkOverla
       return;
     }
 
-    /** 펜·마우스: 필기/지우개. 이동·확대는 손가락만(ZoomPanSurface에서 펜 제외). */
-    if (e.pointerType !== "pen" && e.pointerType !== "mouse") return;
+    /** 손가락(touch)만 패닝. 그 외 타입은 필기(일부 기기에서 스타일러스가 pen이 아닐 수 있음). */
     e.preventDefault();
     e.currentTarget.setPointerCapture(e.pointerId);
     activeDrawPointerId.current = e.pointerId;
@@ -367,7 +373,7 @@ export const InkOverlay = forwardRef<InkOverlayHandle, Props>(function InkOverla
       return;
     }
 
-    if ((e.pointerType === "pen" || e.pointerType === "mouse") && tool === "erase") {
+    if (tool === "erase") {
       eraserHoverRef.current = clientPointFromClient(e.clientX, e.clientY);
       if (activeDrawPointerId.current === e.pointerId) {
         const list = coalescedPointerMoves(e);

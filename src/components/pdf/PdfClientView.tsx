@@ -1,5 +1,6 @@
 "use client";
 
+import { useI18n } from "@/lib/i18n/LocaleProvider";
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import { Document, Page, pdfjs } from "react-pdf";
 import "react-pdf/dist/Page/AnnotationLayer.css";
@@ -30,6 +31,7 @@ export function PdfClientView({
   viewportScale = 1,
   onPdfLoaded,
 }: Props) {
+  const { t } = useI18n();
   const containerRef = useRef<HTMLDivElement | null>(null);
   const cap = wideMode ? 8192 : maxWidthPx;
   const [containerWidth, setContainerWidth] = useState(() => {
@@ -122,10 +124,10 @@ export function PdfClientView({
             }}
             loading={
               <p className="min-h-[36vh] p-8 text-center text-sm text-zinc-500 md:min-h-[320px]">
-                PDF 불러오는 중…
+                {t("pdf.loading")}
               </p>
             }
-            error={<p className="p-4 text-sm text-red-600">PDF를 표시할 수 없습니다.</p>}
+            error={<p className="p-4 text-sm text-red-600">{t("pdf.error")}</p>}
           >
             <Page
               key={pageNumber}

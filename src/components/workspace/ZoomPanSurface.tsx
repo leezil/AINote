@@ -1,5 +1,6 @@
 "use client";
 
+import { useI18n } from "@/lib/i18n/LocaleProvider";
 import {
   useCallback,
   useEffect,
@@ -59,6 +60,7 @@ export function ZoomPanSurface({
   touchBridgeRef,
   stretchContent = false,
 }: Props) {
+  const { t } = useI18n();
   const [scale, setScale] = useState(() => initialScale ?? 1);
   const [pan, setPan] = useState({ x: 0, y: 0 });
   const scaleRef = useRef(scale);
@@ -272,13 +274,13 @@ export function ZoomPanSurface({
           onPointerDown={ignorePenUi}
           onClick={reset}
         >
-          초기화
+          {t("zoom.reset")}
         </button>
       </div>
 
       <div
         role="application"
-        aria-label="확대 및 이동 영역"
+        aria-label={t("zoom.regionAria")}
         className={[
           "flex h-full w-full min-h-0",
           stretchContent ? "items-stretch justify-center" : "items-center justify-center",
@@ -290,8 +292,10 @@ export function ZoomPanSurface({
       >
         <div
           className={[
-            "will-change-transform",
-            stretchContent ? "flex h-full min-h-0 w-full max-w-full justify-center" : "",
+            "will-change-transform max-h-full max-w-full min-h-0",
+            stretchContent
+              ? "flex h-full w-full justify-center"
+              : "flex h-full w-max min-h-0 flex-col items-stretch",
           ].join(" ")}
           style={{
             transform: `translate(${pan.x}px, ${pan.y}px) scale(${scale})`,
