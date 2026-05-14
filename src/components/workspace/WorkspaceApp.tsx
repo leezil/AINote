@@ -14,6 +14,7 @@ import type { StoredDocumentMeta } from "@/lib/storage/document-store";
 import type { AskRequest } from "@/lib/ai/ask-schema";
 import { inferPdfMaterialIntentFromQuestion } from "@/lib/ai/scope-intent";
 import { InkOverlay, type InkOverlayHandle } from "@/components/ink/InkOverlay";
+import { WorkspaceDocImage } from "@/components/workspace/WorkspaceDocImage";
 import { ZoomPanSurface } from "@/components/workspace/ZoomPanSurface";
 import { useI18n } from "@/lib/i18n/LocaleProvider";
 
@@ -856,9 +857,9 @@ export function WorkspaceApp() {
                         viewerFullscreen && inkLayerActive ? "max-h-full min-h-0 overflow-auto" : "",
                       ].join(" ")}
                     >
-                      {/* eslint-disable-next-line @next/next/no-img-element */}
-                      <img
-                        src={fileUrl}
+                      <WorkspaceDocImage
+                        fileUrl={fileUrl}
+                        fetchHeaders={workspaceHeaders}
                         alt={activeMeta.filename}
                         className="max-h-[85vh] w-auto max-w-none object-contain md:max-h-[90vh]"
                       />
@@ -869,6 +870,7 @@ export function WorkspaceApp() {
                   <InkOverlay
                     ref={inkRef}
                     storageKey={inkStorageKey}
+                    interactionsEnabled={inkPointerActive}
                     tool={penTool === "erase" ? "erase" : "draw"}
                     strokeColor={inkColor}
                     strokeWidth={inkWidth}

@@ -23,6 +23,11 @@ type Props = {
   tool: InkTool;
   /** ZoomPanSurface CSS scale과 맞춰 캔버스 내부 해상도를 올림(확대 시 선명도). */
   viewportScale?: number;
+  /**
+   * false일 때는 포인터 리스너를 붙이지 않음(이동·확대 모드).
+   * true로 바뀔 때마다 리스너를 다시 등록해 캔버스 입력이 살아나게 함.
+   */
+  interactionsEnabled?: boolean;
 };
 
 export type Stroke = {
@@ -86,6 +91,7 @@ export const InkOverlay = forwardRef<InkOverlayHandle, Props>(function InkOverla
     eraserRadius = 16,
     tool,
     viewportScale = 1,
+    interactionsEnabled = true,
   },
   ref,
 ) {
@@ -109,7 +115,16 @@ export const InkOverlay = forwardRef<InkOverlayHandle, Props>(function InkOverla
     if (!ctx) return;
     ctx.clearRect(0, 0, canvas.width, canvas.height);
     for (const s of strokesRef.current) {
-      if (s.points.length < 2) continue;
+      if (s.points.length === 0) continue;
+      if (s.points.length === 1) {
+        const p = s.points[0];
+        const r = Math.max(0.6, s.width / 2);
+        ctx.fillStyle = s.color;
+        ctx.beginPath();
+        ctx.arc(p.x, p.y, r, 0, Math.PI * 2);
+        ctx.fill();
+        continue;
+      }
       ctx.strokeStyle = s.color;
       ctx.lineWidth = s.width;
       ctx.lineCap = "round";
@@ -121,18 +136,27 @@ export const InkOverlay = forwardRef<InkOverlayHandle, Props>(function InkOverla
       }
       ctx.stroke();
     }
-    if (currentRef.current && currentRef.current.points.length >= 2) {
+    if (currentRef.current) {
       const s = currentRef.current;
-      ctx.strokeStyle = s.color;
-      ctx.lineWidth = s.width;
-      ctx.lineCap = "round";
-      ctx.lineJoin = "round";
-      ctx.beginPath();
-      ctx.moveTo(s.points[0].x, s.points[0].y);
-      for (let i = 1; i < s.points.length; i++) {
-        ctx.lineTo(s.points[i].x, s.points[i].y);
+      if (s.points.length === 1) {
+        const p = s.points[0];
+        const r = Math.max(0.6, s.width / 2);
+        ctx.fillStyle = s.color;
+        ctx.beginPath();
+        ctx.arc(p.x, p.y, r, 0, Math.PI * 2);
+        ctx.fill();
+      } else if (s.points.length >= 2) {
+        ctx.strokeStyle = s.color;
+        ctx.lineWidth = s.width;
+        ctx.lineCap = "round";
+        ctx.lineJoin = "round";
+        ctx.beginPath();
+        ctx.moveTo(s.points[0].x, s.points[0].y);
+        for (let i = 1; i < s.points.length; i++) {
+          ctx.lineTo(s.points[i].x, s.points[i].y);
+        }
+        ctx.stroke();
       }
-      ctx.stroke();
     }
     if (tool === "erase" && eraserHoverRef.current) {
       const { x, y } = eraserHoverRef.current;
@@ -276,7 +300,9 @@ export const InkOverlay = forwardRef<InkOverlayHandle, Props>(function InkOverla
 
   useLayoutEffect(() => {
     const canvas = canvasRef.current;
-    if (!canvas) return;
+    if (!canvas || !interactionsEnabled) {
+      return;
+    }
 
     const passiveFalse: AddEventListenerOptions = { passive: false };
 
@@ -382,7 +408,7 @@ export const InkOverlay = forwardRef<InkOverlayHandle, Props>(function InkOverla
         return;
       }
 
-      if (currentRef.current && currentRef.current.points.length > 1) {
+      if (currentRef.current && currentRef.current.points.length >= 1) {
         strokesRef.current.push(currentRef.current);
         persistFn();
       }
@@ -414,7 +440,7 @@ export const InkOverlay = forwardRef<InkOverlayHandle, Props>(function InkOverla
       canvas.removeEventListener("pointercancel", endStroke, passiveFalse);
       canvas.removeEventListener("pointerleave", onPointerLeave);
     };
-  }, []);
+  }, [interactionsEnabled, storageKey]);
 
   return (
     <canvas
