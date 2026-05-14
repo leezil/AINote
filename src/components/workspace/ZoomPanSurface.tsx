@@ -22,9 +22,13 @@ type Props = {
   /** 마운트 시 복원할 배율(일반/전체화면별로 부모에서 주입). */
   initialScale?: number;
   /**
-   * 값이 바뀔 때 확대·이동을 초기화. 문서·페이지 전환 시에만 사용(전체화면 전환과는 별도).
+   * 값이 바뀔 때 확대·이동·배율을 초기화(문서 전환 등).
    */
   viewResetKey?: string | number;
+  /**
+   * 값이 바뀔 때 이동·핀치 세션만 초기화(배율 유지). PDF 페이지 넘김 등.
+   */
+  panResetKey?: string | number;
   /** 필기 레이어에서 손가락 패닝을 이 객체로 전달. */
   touchBridgeRef?: MutableRefObject<ZoomPanTouchBridge | null> | null;
   /** true면 자식 영역을 뷰포트 높이까지 채움(전체화면+필기 시 캔버스 높이 확보). */
@@ -51,6 +55,7 @@ export function ZoomPanSurface({
   onScaleChange,
   initialScale,
   viewResetKey,
+  panResetKey,
   touchBridgeRef,
   stretchContent = false,
 }: Props) {
@@ -99,6 +104,16 @@ export function ZoomPanSurface({
     pinchTouchRef.current = null;
     onScaleChange?.(1);
   }, [viewResetKey, onScaleChange]);
+
+  useLayoutEffect(() => {
+    if (panResetKey === undefined) return;
+    setPan({ x: 0, y: 0 });
+    pinchSession.current = null;
+    panDrag.current = null;
+    pointers.current.clear();
+    touchDragRef.current = null;
+    pinchTouchRef.current = null;
+  }, [panResetKey]);
 
   useEffect(() => {
     if (!touchBridgeRef) return;

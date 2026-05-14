@@ -53,16 +53,16 @@ export function WorkspaceApp() {
   const [answer, setAnswer] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  /** 문서 뷰어를 뷰포트에 고정하고 AI 패널을 우측(가로) 또는 하단(세로)에 둠 */
+  /** 문서 뷰어 전체화면 + md */
   const [viewerFullscreen, setViewerFullscreen] = useState(false);
   /** ink / erase — 이동·확대는 손가락·핀치로 자동 */
   const [penTool, setPenTool] = useState<PenTool>("ink");
-  /** 전체화면 md 가로: AI를 아래(기본) 또는 위 */
+  /** 세로 뷰포트(상하 스택): AI를 아래(기본) 또는 위 */
   const [aiLandscapeStack, setAiLandscapeStack] = useState<AiLandscapeStack>("bottom");
-  /** 전체화면 md 세로(가로 분할): AI를 오른쪽(기본) 또는 왼쪽 */
+  /** 가로 뷰포트(좌우 분할): AI를 오른쪽(기본) 또는 왼쪽 */
   const [aiPanelSide, setAiPanelSide] = useState<AiPanelSide>("right");
   const [layoutViewport, setLayoutViewport] = useState({ w: 0, h: 0 });
-  /** 전체화면에서 AI 패널 표시 (가로 레이아웃에서 토글·리사이즈 대상) */
+  /** 전체화면에서 AI 패널 표시 */
   const [fullscreenAiOpen, setFullscreenAiOpen] = useState(true);
   const [aiPanelWidthPx, setAiPanelWidthPx] = useState(380);
   const [isMdUp, setIsMdUp] = useState(false);
@@ -77,11 +77,17 @@ export function WorkspaceApp() {
   const navigationMode = true;
   const inkLayerActive = Boolean(activeId);
   const viewportPdfScale = viewerFullscreen ? zoomScaleFs : zoomScaleWin;
-  const isFsLandscapeSplit =
-    viewerFullscreen && isMdUp && layoutViewport.w > 0 && layoutViewport.w > layoutViewport.h;
+  const isMdFsViewport =
+    viewerFullscreen && isMdUp && layoutViewport.w > 0;
+  /** 세로로 긴 뷰포트(세로 모드): 뷰어·AI 상하 스택 → AI 상단/하단 */
+  const aiLayoutVerticalStack =
+    isMdFsViewport && layoutViewport.w <= layoutViewport.h;
+  /** 가로로 넓은 뷰포트(가로 모드): 뷰어·AI 좌우 분할 → AI 왼쪽/오른쪽 */
+  const aiLayoutHorizontalSplit =
+    isMdFsViewport && layoutViewport.w > layoutViewport.h;
   const fsOrderSwap =
-    (viewerFullscreen && isMdUp && isFsLandscapeSplit && aiLandscapeStack === "top") ||
-    (viewerFullscreen && isMdUp && !isFsLandscapeSplit && aiPanelSide === "left");
+    (viewerFullscreen && isMdUp && aiLayoutVerticalStack && aiLandscapeStack === "top") ||
+    (viewerFullscreen && isMdUp && aiLayoutHorizontalSplit && aiPanelSide === "left");
 
   const handleViewerScaleChange = useCallback(
     (s: number) => {
@@ -152,17 +158,18 @@ export function WorkspaceApp() {
 
       const w = window.innerWidth;
       const h = window.innerHeight;
-      const landscape = viewerFullscreen && isMdUp && w > h;
-      if (landscape) {
-        aiResizeModeRef.current = aiLandscapeStackRef.current === "bottom" ? "colBottom" : "colTop";
-        aiResizeDragRef.current = {
-          startClient: e.clientY,
-          startSpan: aiPanelWidthRef.current,
-        };
-      } else {
+      const horizSplit = viewerFullscreen && isMdUp && w > h;
+      if (horizSplit) {
         aiResizeModeRef.current = "row";
         aiResizeDragRef.current = {
           startClient: e.clientX,
+          startSpan: aiPanelWidthRef.current,
+        };
+      } else {
+        aiResizeModeRef.current =
+          aiLandscapeStackRef.current === "bottom" ? "colBottom" : "colTop";
+        aiResizeDragRef.current = {
+          startClient: e.clientY,
           startSpan: aiPanelWidthRef.current,
         };
       }
@@ -546,7 +553,7 @@ export function WorkspaceApp() {
           viewerFullscreen
             ? [
                 "fixed inset-0 z-50 m-0 h-[100dvh] max-w-none flex-col bg-white p-0 dark:bg-zinc-950",
-                isMdUp && !isFsLandscapeSplit ? "md:flex-row md:gap-0" : "",
+                isMdUp && aiLayoutHorizontalSplit ? "md:flex-row md:gap-0" : "",
               ].join(" ")
             : "flex-col gap-3",
         ].join(" ")}
@@ -621,75 +628,6 @@ export function WorkspaceApp() {
               >
                 지우개
               </button>
-              {viewerFullscreen && isMdUp ? (
-                isFsLandscapeSplit ? (
-                  <span className="flex flex-wrap gap-1">
-                    <button
-                      type="button"
-                      className={[
-                        "rounded-md border px-2 py-1 text-xs",
-                        aiLandscapeStack === "bottom"
-                          ? "border-zinc-900 bg-zinc-900 text-white dark:border-zinc-100 dark:bg-zinc-100 dark:text-zinc-900"
-                          : "border-zinc-200 dark:border-zinc-700",
-                      ].join(" ")}
-                      onClick={() => {
-                        setAiLandscapeStack("bottom");
-                        saveAiLayoutToStorage(undefined, { stack: "bottom" });
-                      }}
-                    >
-                      AI 하단
-                    </button>
-                    <button
-                      type="button"
-                      className={[
-                        "rounded-md border px-2 py-1 text-xs",
-                        aiLandscapeStack === "top"
-                          ? "border-zinc-900 bg-zinc-900 text-white dark:border-zinc-100 dark:bg-zinc-100 dark:text-zinc-900"
-                          : "border-zinc-200 dark:border-zinc-700",
-                      ].join(" ")}
-                      onClick={() => {
-                        setAiLandscapeStack("top");
-                        saveAiLayoutToStorage(undefined, { stack: "top" });
-                      }}
-                    >
-                      AI 상단
-                    </button>
-                  </span>
-                ) : (
-                  <span className="flex flex-wrap gap-1">
-                    <button
-                      type="button"
-                      className={[
-                        "rounded-md border px-2 py-1 text-xs",
-                        aiPanelSide === "right"
-                          ? "border-zinc-900 bg-zinc-900 text-white dark:border-zinc-100 dark:bg-zinc-100 dark:text-zinc-900"
-                          : "border-zinc-200 dark:border-zinc-700",
-                      ].join(" ")}
-                      onClick={() => {
-                        setAiPanelSide("right");
-                        saveAiLayoutToStorage(undefined, { side: "right" });
-                      }}
-                    >
-                      AI 오른쪽
-                    </button>
-                    <button
-                      type="button"
-                      className={[
-                        "rounded-md border px-2 py-1 text-xs",
-                        aiPanelSide === "left"
-                          ? "border-zinc-900 bg-zinc-900 text-white dark:border-zinc-100 dark:bg-zinc-100 dark:text-zinc-900"
-                          : "border-zinc-200 dark:border-zinc-700",
-                      ].join(" ")}
-                      onClick={() => {
-                        setAiPanelSide("left");
-                        saveAiLayoutToStorage(undefined, { side: "left" });
-                      }}
-                    >
-                      AI 왼쪽
-                    </button>
-                  </span>
-                )
-              ) : null}
               {inkLayerActive ? (
                 <span className="flex flex-wrap items-center gap-1.5">
                   <label className="flex items-center gap-1 text-xs text-zinc-600 dark:text-zinc-400">
@@ -785,7 +723,14 @@ export function WorkspaceApp() {
                 onScaleChange={handleViewerScaleChange}
                 touchBridgeRef={touchPanBridgeRef}
                 stretchContent={viewerFullscreen && inkLayerActive}
-                viewResetKey={activeMeta ? `${activeMeta.id}-${currentPage}` : "none"}
+                viewResetKey={activeMeta ? activeMeta.id : "none"}
+                panResetKey={
+                  activeMeta
+                    ? activeMeta.kind === "pdf"
+                      ? `${activeMeta.id}-p${currentPage}`
+                      : activeMeta.id
+                    : "none"
+                }
               >
                 <div
                   ref={captureRef}
@@ -866,12 +811,12 @@ export function WorkspaceApp() {
         {viewerFullscreen && fullscreenAiOpen && isMdUp ? (
           <div
             role="separator"
-            aria-label={isFsLandscapeSplit ? "AI 패널 높이 조절" : "AI 패널 너비 조절"}
-            aria-orientation={isFsLandscapeSplit ? "horizontal" : "vertical"}
+            aria-label={aiLayoutVerticalStack ? "AI 패널 높이 조절" : "AI 패널 너비 조절"}
+            aria-orientation={aiLayoutVerticalStack ? "horizontal" : "vertical"}
             className={[
               "relative z-20 shrink-0 touch-none select-none bg-zinc-200 hover:bg-zinc-400 dark:bg-zinc-700 dark:hover:bg-zinc-500",
               "order-2 hidden md:block",
-              isFsLandscapeSplit
+              aiLayoutVerticalStack
                 ? "h-3 w-full cursor-row-resize"
                 : "w-3 cursor-col-resize self-stretch",
             ].join(" ")}
@@ -891,7 +836,7 @@ export function WorkspaceApp() {
                       ? "order-1"
                       : "order-3"
                     : "",
-                  isMdUp && isFsLandscapeSplit
+                  isMdUp && aiLayoutVerticalStack
                     ? [
                         "w-full p-3 md:p-4",
                         aiLandscapeStack === "top"
@@ -913,7 +858,7 @@ export function WorkspaceApp() {
           ].join(" ")}
           style={
             viewerFullscreen && fullscreenAiOpen && isMdUp
-              ? isFsLandscapeSplit
+              ? aiLayoutVerticalStack
                 ? {
                     height: aiPanelWidthPx,
                     minHeight: 160,
@@ -927,7 +872,82 @@ export function WorkspaceApp() {
               : undefined
           }
         >
-          <p className="text-sm font-medium text-zinc-800 dark:text-zinc-100">AI 질문 (버튼을 누를 때만 호출)</p>
+          <div className="mb-2 flex min-w-0 flex-wrap items-start justify-between gap-2 md:mb-3">
+            <p className="min-w-0 flex-1 text-sm font-medium text-zinc-800 dark:text-zinc-100">
+              AI 질문 (버튼을 누를 때만 호출)
+            </p>
+            {viewerFullscreen && isMdUp ? (
+              <div className="flex shrink-0 flex-wrap justify-end gap-1">
+                {aiLayoutVerticalStack ? (
+                  <>
+                    <button
+                      type="button"
+                      className={[
+                        "rounded-md border px-2 py-1 text-xs",
+                        aiLandscapeStack === "bottom"
+                          ? "border-zinc-900 bg-zinc-900 text-white dark:border-zinc-100 dark:bg-zinc-100 dark:text-zinc-900"
+                          : "border-zinc-200 dark:border-zinc-700",
+                      ].join(" ")}
+                      onClick={() => {
+                        setAiLandscapeStack("bottom");
+                        saveAiLayoutToStorage(undefined, { stack: "bottom" });
+                      }}
+                    >
+                      AI 하단
+                    </button>
+                    <button
+                      type="button"
+                      className={[
+                        "rounded-md border px-2 py-1 text-xs",
+                        aiLandscapeStack === "top"
+                          ? "border-zinc-900 bg-zinc-900 text-white dark:border-zinc-100 dark:bg-zinc-100 dark:text-zinc-900"
+                          : "border-zinc-200 dark:border-zinc-700",
+                      ].join(" ")}
+                      onClick={() => {
+                        setAiLandscapeStack("top");
+                        saveAiLayoutToStorage(undefined, { stack: "top" });
+                      }}
+                    >
+                      AI 상단
+                    </button>
+                  </>
+                ) : (
+                  <>
+                    <button
+                      type="button"
+                      className={[
+                        "rounded-md border px-2 py-1 text-xs",
+                        aiPanelSide === "right"
+                          ? "border-zinc-900 bg-zinc-900 text-white dark:border-zinc-100 dark:bg-zinc-100 dark:text-zinc-900"
+                          : "border-zinc-200 dark:border-zinc-700",
+                      ].join(" ")}
+                      onClick={() => {
+                        setAiPanelSide("right");
+                        saveAiLayoutToStorage(undefined, { side: "right" });
+                      }}
+                    >
+                      AI 오른쪽
+                    </button>
+                    <button
+                      type="button"
+                      className={[
+                        "rounded-md border px-2 py-1 text-xs",
+                        aiPanelSide === "left"
+                          ? "border-zinc-900 bg-zinc-900 text-white dark:border-zinc-100 dark:bg-zinc-100 dark:text-zinc-900"
+                          : "border-zinc-200 dark:border-zinc-700",
+                      ].join(" ")}
+                      onClick={() => {
+                        setAiPanelSide("left");
+                        saveAiLayoutToStorage(undefined, { side: "left" });
+                      }}
+                    >
+                      AI 왼쪽
+                    </button>
+                  </>
+                )}
+              </div>
+            ) : null}
+          </div>
           {activeMeta?.kind === "pdf" ? (
             <fieldset className="mt-2 space-y-1 text-sm text-zinc-700 dark:text-zinc-300">
               <p className="text-xs text-zinc-500">
@@ -1031,7 +1051,7 @@ export function WorkspaceApp() {
               aria-label="AI 패널 열기"
               className={[
                 "fixed z-[60] rounded-full border border-zinc-300 bg-white px-4 py-2 text-sm font-medium text-zinc-800 shadow-md dark:border-zinc-600 dark:bg-zinc-900 dark:text-zinc-100",
-                isFsLandscapeSplit
+                aiLayoutVerticalStack
                   ? "bottom-6 left-1/2 hidden -translate-x-1/2 md:block"
                   : "bottom-6 left-1/2 -translate-x-1/2 md:hidden",
               ].join(" ")}
@@ -1044,7 +1064,7 @@ export function WorkspaceApp() {
               aria-label="AI 패널 열기"
               className={[
                 "fixed z-[60] rounded-l-lg border border-r-0 border-zinc-300 bg-white px-2 py-6 text-sm font-medium text-zinc-800 shadow-md dark:border-zinc-600 dark:bg-zinc-900 dark:text-zinc-100",
-                isFsLandscapeSplit
+                aiLayoutVerticalStack
                   ? "hidden"
                   : "right-0 top-1/2 hidden -translate-y-1/2 md:block",
               ].join(" ")}
