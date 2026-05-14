@@ -101,6 +101,8 @@ export const InkOverlay = forwardRef<InkOverlayHandle, Props>(function InkOverla
   const activeDrawPointerId = useRef<number | null>(null);
   const eraserHoverRef = useRef<Point | null>(null);
   const [, bump] = useState(0);
+  /** syncLayout·리사이즈 직후 포인터 리스너를 다시 붙이기 위한 세대 번호 */
+  const [layoutGen, setLayoutGen] = useState(0);
   const lastAllocRef = useRef<{ cssW: number; cssH: number; dpr: number }>({
     cssW: 0,
     cssH: 0,
@@ -272,6 +274,13 @@ export const InkOverlay = forwardRef<InkOverlayHandle, Props>(function InkOverla
         lastAllocRef.current = { cssW: 0, cssH: 0, dpr: 0 };
         resizeToContainer();
         bump((n) => n + 1);
+        setLayoutGen((g) => g + 1);
+        requestAnimationFrame(() => {
+          lastAllocRef.current = { cssW: 0, cssH: 0, dpr: 0 };
+          resizeToContainer();
+          bump((n) => n + 1);
+          setLayoutGen((g) => g + 1);
+        });
       },
     }),
     [persist, redraw, resizeToContainer],
@@ -440,7 +449,7 @@ export const InkOverlay = forwardRef<InkOverlayHandle, Props>(function InkOverla
       canvas.removeEventListener("pointercancel", endStroke, passiveFalse);
       canvas.removeEventListener("pointerleave", onPointerLeave);
     };
-  }, [interactionsEnabled, storageKey]);
+  }, [interactionsEnabled, storageKey, layoutGen]);
 
   return (
     <canvas

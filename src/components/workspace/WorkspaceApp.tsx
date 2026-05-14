@@ -245,9 +245,7 @@ export function WorkspaceApp() {
         detachAiResizeListeners();
         saveAiLayoutToStorage(next);
         requestAnimationFrame(() => {
-          requestAnimationFrame(() => {
-            inkRef.current?.syncLayout();
-          });
+          inkRef.current?.syncLayout();
         });
       };
 
