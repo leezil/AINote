@@ -4,10 +4,48 @@
  *
  * On Vercel / strict Node, pdf.js needs standard fonts + CMaps loaded over HTTPS
  * (bundled paths are not available the same way as in the browser worker).
+ *
+ * pdfjs 5.x는 Node에서 `DOMMatrix` / `Path2D` / `ImageData`를 `@napi-rs/canvas`로
+ * 채우려 합니다. optionalDependencies만으로는 CI/Vercel에서 빠질 수 있어
+ * 패키지에 직접 넣고, 모듈 로드 전에 글로벌을 주입합니다.
  */
+
+import { createRequire } from "node:module";
 
 const PDFJS_DIST_VERSION = "5.4.296";
 const PDFJS_ASSETS_BASE = `https://unpkg.com/pdfjs-dist@${PDFJS_DIST_VERSION}/`;
+
+const require = createRequire(import.meta.url);
+
+let pdfJsModulePromise: Promise<typeof import("pdfjs-dist/legacy/build/pdf.mjs")> | null = null;
+
+function ensurePdfJsNodeGlobals(): void {
+  if (typeof globalThis.DOMMatrix !== "undefined") return;
+  try {
+    const c = require("@napi-rs/canvas") as typeof import("@napi-rs/canvas");
+    if (!globalThis.DOMMatrix && c.DOMMatrix) {
+      (globalThis as unknown as { DOMMatrix: typeof c.DOMMatrix }).DOMMatrix = c.DOMMatrix;
+    }
+    if (!globalThis.Path2D && c.Path2D) {
+      (globalThis as unknown as { Path2D: typeof c.Path2D }).Path2D = c.Path2D;
+    }
+    if (!globalThis.ImageData && c.ImageData) {
+      (globalThis as unknown as { ImageData: typeof c.ImageData }).ImageData = c.ImageData;
+    }
+  } catch (e) {
+    console.error("[ainote] @napi-rs/canvas 로드 실패 (pdf.js Node 글로벌):", e);
+  }
+}
+
+async function loadPdfJs() {
+  if (!pdfJsModulePromise) {
+    pdfJsModulePromise = (async () => {
+      ensurePdfJsNodeGlobals();
+      return import("pdfjs-dist/legacy/build/pdf.mjs");
+    })();
+  }
+  return pdfJsModulePromise;
+}
 
 function getDocumentParams(buffer: Buffer) {
   return {
@@ -22,7 +60,7 @@ function getDocumentParams(buffer: Buffer) {
 
 export async function getPdfPageCount(buffer: Buffer): Promise<number> {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const pdfjs: any = await import("pdfjs-dist/legacy/build/pdf.mjs");
+  const pdfjs: any = await loadPdfJs();
   const loadingTask = pdfjs.getDocument(getDocumentParams(buffer));
   const pdf = await loadingTask.promise;
   try {
@@ -37,7 +75,7 @@ export async function extractPdfPageText(
   pageNumber1Based: number,
 ): Promise<{ text: string; pageCount: number }> {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const pdfjs: any = await import("pdfjs-dist/legacy/build/pdf.mjs");
+  const pdfjs: any = await loadPdfJs();
   const loadingTask = pdfjs.getDocument(getDocumentParams(buffer));
   const pdf = await loadingTask.promise;
   try {

@@ -10,6 +10,7 @@
   },
   "dependencies": {
     "@google/generative-ai": "^0.24.1",
+    "@napi-rs/canvas": "^0.1.100",
     "@vercel/blob": "^2.3.3",
     "html-to-image": "^1.11.13",
     "next": "16.2.6",
