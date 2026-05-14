@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { getDataStoreRoot } from "@/lib/storage/data-root";
 
 export type StoredDocumentKind = "pdf" | "image" | "text";
 
@@ -26,7 +27,7 @@ export class DocumentStore {
   constructor(private readonly workspaceId: string) {}
 
   private rootDir(): string {
-    return path.join(process.cwd(), ".data", `ws_${sanitizeWorkspaceId(this.workspaceId)}`);
+    return path.join(getDataStoreRoot(), `ws_${sanitizeWorkspaceId(this.workspaceId)}`);
   }
 
   private manifestPath(): string {
