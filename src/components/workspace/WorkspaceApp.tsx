@@ -606,7 +606,7 @@ export function WorkspaceApp() {
       >
         <section
           className={[
-            "flex min-h-0 flex-col overflow-hidden border border-zinc-200 bg-white shadow-sm dark:border-zinc-800 dark:bg-zinc-950",
+            "flex min-h-0 min-w-0 flex-col overflow-hidden border border-zinc-200 bg-white shadow-sm dark:border-zinc-800 dark:bg-zinc-950",
             viewerFullscreen
               ? [
                   "min-h-0 flex-1 rounded-none border-0 shadow-none md:min-h-0",
@@ -755,7 +755,7 @@ export function WorkspaceApp() {
           <div
             className={[
               "relative isolate z-0 bg-zinc-50 dark:bg-zinc-900/40",
-              viewerFullscreen ? "min-h-0 flex-1 overflow-hidden" : "min-h-[320px] flex-1 overflow-auto",
+              viewerFullscreen ? "min-h-0 flex-1 touch-none overflow-hidden" : "min-h-[320px] flex-1 overflow-auto",
             ].join(" ")}
           >
             {!activeMeta ? (
@@ -792,8 +792,8 @@ export function WorkspaceApp() {
                     <div
                       className={
                         viewerFullscreen && inkLayerActive
-                          ? "flex max-h-full min-h-0 justify-center overflow-auto"
-                          : ""
+                          ? "relative z-0 flex max-h-full min-h-0 justify-center overflow-auto"
+                          : "relative z-0"
                       }
                     >
                       <PdfClientView
@@ -819,10 +819,8 @@ export function WorkspaceApp() {
                   ) : activeMeta.kind === "image" ? (
                     <div
                       className={[
-                        "flex justify-center p-2",
-                        viewerFullscreen && inkLayerActive
-                          ? "max-h-full min-h-0 overflow-auto"
-                          : "",
+                        "relative z-0 flex justify-center p-2",
+                        viewerFullscreen && inkLayerActive ? "max-h-full min-h-0 overflow-auto" : "",
                       ].join(" ")}
                     >
                       {/* eslint-disable-next-line @next/next/no-img-element */}
@@ -845,7 +843,7 @@ export function WorkspaceApp() {
                     viewportScale={viewportPdfScale}
                     touchPanBridge={touchPanBridgeRef}
                     className={[
-                      "absolute inset-0 z-10",
+                      "absolute inset-0 z-20",
                       inkLayerActive ? "pointer-events-auto" : "pointer-events-none",
                     ].join(" ")}
                   />

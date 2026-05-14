@@ -47,7 +47,7 @@ type PinchSession = {
 
 /**
  * PDF/이미지 영역에 CSS transform 기반 확대·축소·이동.
- * iPad: 한 손가락 드래그 = 이동, 두 손가락 = 핀치 줌(navigationMode일 때만).
+ * 패닝/핀치는 문서 뒤쪽 전용 백드롭에서만 받아, 필기·PDF와 포인터 캡처가 충돌하지 않게 함.
  */
 export function ZoomPanSurface({
   children,
@@ -157,16 +157,21 @@ export function ZoomPanSurface({
     const el = viewportRef.current;
     if (!el) return;
     const onWheel = (e: WheelEvent) => {
-      const t = e.target;
-      if (!(t instanceof Node)) return;
       const surface = el.querySelector("[data-zoom-document-surface]");
-      if (!surface?.contains(t)) return;
+      if (!(surface instanceof Element)) return;
+      const r = surface.getBoundingClientRect();
+      if (
+        e.clientX < r.left ||
+        e.clientX > r.right ||
+        e.clientY < r.top ||
+        e.clientY > r.bottom
+      ) {
+        return;
+      }
       if (!e.ctrlKey && !e.metaKey && Math.abs(e.deltaY) < 24) return;
       e.preventDefault();
-      const rect =
-        surface instanceof Element ? surface.getBoundingClientRect() : el.getBoundingClientRect();
-      const mx = e.clientX - rect.left - rect.width / 2;
-      const my = e.clientY - rect.top - rect.height / 2;
+      const mx = e.clientX - r.left - r.width / 2;
+      const my = e.clientY - r.top - r.height / 2;
       const delta = -e.deltaY;
       setScale((prevS) => {
         const next = clampScale(prevS * (1 + (delta > 0 ? WHEEL_SCALE_STEP : -WHEEL_SCALE_STEP)));
@@ -178,25 +183,16 @@ export function ZoomPanSurface({
         return next;
       });
     };
-    el.addEventListener("wheel", onWheel, { passive: false });
-    return () => el.removeEventListener("wheel", onWheel);
+    el.addEventListener("wheel", onWheel, { passive: false, capture: true });
+    return () => el.removeEventListener("wheel", onWheel, true);
   }, [clampScale]);
 
   const distance = (a: ReactPointerEvent, b: ReactPointerEvent) =>
     Math.hypot(a.clientX - b.clientX, a.clientY - b.clientY);
 
-  /** PDF/필기 캔버스 등 — 여기서 시작한 포인터는 InkOverlay가 캡처·처리. 부모에서 잡으면 캡처를 빼앗아 필기가 막힘 */
-  const eventTargetIsInsideDocumentSurface = (e: ReactPointerEvent<Element>) => {
-    const t = e.target;
-    if (!(t instanceof Element)) return false;
-    return Boolean(t.closest("[data-zoom-document-surface]"));
-  };
-
   const onPointerDown = (e: ReactPointerEvent<HTMLDivElement>) => {
     if (!navigationMode) return;
-    /** Apple Pencil 등은 필기 레이어에서 처리 */
     if (e.pointerType === "pen") return;
-    if (eventTargetIsInsideDocumentSurface(e)) return;
     pointers.current.set(e.pointerId, e);
     const list = [...pointers.current.values()];
     if (list.length === 2) {
@@ -216,7 +212,6 @@ export function ZoomPanSurface({
   const onPointerMove = (e: ReactPointerEvent<HTMLDivElement>) => {
     if (!navigationMode) return;
     if (e.pointerType === "pen") return;
-    if (eventTargetIsInsideDocumentSurface(e) && !pointers.current.has(e.pointerId)) return;
     if (!pointers.current.has(e.pointerId)) return;
     pointers.current.set(e.pointerId, e);
     const list = [...pointers.current.values()];
@@ -261,11 +256,7 @@ export function ZoomPanSurface({
   return (
     <div
       ref={viewportRef}
-      className={[
-        "relative h-full min-h-0 w-full overflow-hidden",
-        navigationMode ? "touch-none cursor-grab active:cursor-grabbing" : "",
-        className ?? "",
-      ].join(" ")}
+      className={["relative h-full min-h-0 w-full overflow-hidden", className ?? ""].join(" ")}
     >
       <div className="pointer-events-none absolute right-2 top-2 z-30 flex flex-col gap-1">
         <button
@@ -294,21 +285,16 @@ export function ZoomPanSurface({
         </button>
       </div>
 
+      {/* 문서·필기: 위 레이어. 바깥은 pointer-events-none → 빈 곳 터치는 아래 백드롭으로 통과 */}
       <div
-        role="application"
-        aria-label={t("zoom.regionAria")}
         className={[
-          "flex h-full w-full min-h-0",
+          "pointer-events-none absolute inset-0 z-[2] flex min-h-0 w-full",
           stretchContent ? "items-stretch justify-center" : "items-start justify-center",
         ].join(" ")}
-        onPointerDown={navigationMode ? onPointerDown : undefined}
-        onPointerMove={navigationMode ? onPointerMove : undefined}
-        onPointerUp={navigationMode ? endPointer : undefined}
-        onPointerCancel={navigationMode ? endPointer : undefined}
       >
         <div
           className={[
-            "will-change-transform max-h-full max-w-full min-h-0",
+            "pointer-events-auto will-change-transform max-h-full max-w-full min-h-0",
             stretchContent
               ? "flex h-full w-full justify-center"
               : "flex w-max min-h-0 max-h-full flex-col items-stretch",
@@ -323,6 +309,19 @@ export function ZoomPanSurface({
           {children}
         </div>
       </div>
+
+      {/* 손가락·마우스 패닝/핀치: 문서 뒤 전용. PDF/캔버스와 이벤트 경합 없음 */}
+      {navigationMode ? (
+        <div
+          role="application"
+          aria-label={t("zoom.regionAria")}
+          className="absolute inset-0 z-0 touch-none cursor-grab active:cursor-grabbing"
+          onPointerDown={onPointerDown}
+          onPointerMove={onPointerMove}
+          onPointerUp={endPointer}
+          onPointerCancel={endPointer}
+        />
+      ) : null}
     </div>
   );
 }

@@ -350,8 +350,7 @@ export const InkOverlay = forwardRef<InkOverlayHandle, Props>(function InkOverla
       return;
     }
 
-    /** 손가락(coarse touch)만 패닝. 그 외는 필기 — 부모 ZoomPan에 버블되면 setPointerCapture가 캔버스를 가로챔 */
-    e.stopPropagation();
+    /** 손가락 패닝 외에는 필기 */
     e.preventDefault();
     e.currentTarget.setPointerCapture(e.pointerId);
     activeDrawPointerId.current = e.pointerId;
@@ -379,7 +378,6 @@ export const InkOverlay = forwardRef<InkOverlayHandle, Props>(function InkOverla
   };
 
   const onPointerMove = (e: React.PointerEvent<HTMLCanvasElement>) => {
-    e.stopPropagation();
     if (e.pointerType === "touch") {
       const fingerSession =
         touchCoordsRef.current.has(e.pointerId) ||
@@ -439,7 +437,6 @@ export const InkOverlay = forwardRef<InkOverlayHandle, Props>(function InkOverla
   };
 
   const endStroke = (e: React.PointerEvent<HTMLCanvasElement>) => {
-    e.stopPropagation();
     if (e.pointerType === "touch") {
       const fingerSession =
         touchCoordsRef.current.has(e.pointerId) ||
