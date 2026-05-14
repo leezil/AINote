@@ -6,9 +6,11 @@ import {
   useLayoutEffect,
   useRef,
   useState,
+  type MutableRefObject,
   type PointerEvent as ReactPointerEvent,
   type ReactNode,
 } from "react";
+import type { ZoomPanTouchBridge } from "@/components/ink/InkOverlay";
 
 type Props = {
   children: ReactNode;
@@ -17,11 +19,16 @@ type Props = {
   className?: string;
   /** 뷰포트 배율(예: PDF 캔버스 DPR 보정용). */
   onScaleChange?: (scale: number) => void;
+  /** 마운트 시 복원할 배율(일반/전체화면별로 부모에서 주입). */
+  initialScale?: number;
   /**
-   * 값이 바뀔 때 확대·이동을 초기화. 페이지/전체화면 전환 후 이전 pan 때문에 화면 밖으로 밀린 것처럼
-   * 보이는 문제를 막기 위해 사용.
+   * 값이 바뀔 때 확대·이동을 초기화. 문서·페이지 전환 시에만 사용(전체화면 전환과는 별도).
    */
   viewResetKey?: string | number;
+  /** 필기 레이어에서 손가락 패닝을 이 객체로 전달. */
+  touchBridgeRef?: MutableRefObject<ZoomPanTouchBridge | null> | null;
+  /** true면 자식 영역을 뷰포트 높이까지 채움(전체화면+필기 시 캔버스 높이 확보). */
+  stretchContent?: boolean;
 };
 
 const MIN_SCALE = 0.22;
@@ -42,10 +49,19 @@ export function ZoomPanSurface({
   navigationMode,
   className,
   onScaleChange,
+  initialScale,
   viewResetKey,
+  touchBridgeRef,
+  stretchContent = false,
 }: Props) {
-  const [scale, setScale] = useState(1);
+  const [scale, setScale] = useState(() => initialScale ?? 1);
   const [pan, setPan] = useState({ x: 0, y: 0 });
+  const scaleRef = useRef(scale);
+  scaleRef.current = scale;
+  const panRef = useRef(pan);
+  panRef.current = pan;
+  const touchDragRef = useRef<{ origX: number; origY: number; sx: number; sy: number } | null>(null);
+  const pinchTouchRef = useRef<{ d0: number; s0: number } | null>(null);
   const viewportRef = useRef<HTMLDivElement | null>(null);
   const pointers = useRef<Map<number, ReactPointerEvent>>(new Map());
   const pinchSession = useRef<PinchSession | null>(null);
@@ -79,8 +95,46 @@ export function ZoomPanSurface({
     pinchSession.current = null;
     panDrag.current = null;
     pointers.current.clear();
+    touchDragRef.current = null;
+    pinchTouchRef.current = null;
     onScaleChange?.(1);
   }, [viewResetKey, onScaleChange]);
+
+  useEffect(() => {
+    if (!touchBridgeRef) return;
+    const bridge: ZoomPanTouchBridge = {
+      beginTouchPan(clientX: number, clientY: number) {
+        const p = panRef.current;
+        touchDragRef.current = { origX: p.x, origY: p.y, sx: clientX, sy: clientY };
+      },
+      moveTouchPan(clientX: number, clientY: number) {
+        const d = touchDragRef.current;
+        if (!d) return;
+        setPan({
+          x: d.origX + (clientX - d.sx),
+          y: d.origY + (clientY - d.sy),
+        });
+      },
+      endTouchPan() {
+        touchDragRef.current = null;
+      },
+      beginPinch(d0: number) {
+        pinchTouchRef.current = { d0, s0: scaleRef.current };
+      },
+      updatePinch(d1: number) {
+        const p = pinchTouchRef.current;
+        if (!p || p.d0 < 8 || d1 < 8) return;
+        setScale(clampScale(p.s0 * (d1 / p.d0)));
+      },
+      endPinch() {
+        pinchTouchRef.current = null;
+      },
+    };
+    touchBridgeRef.current = bridge;
+    return () => {
+      touchBridgeRef.current = null;
+    };
+  }, [touchBridgeRef, clampScale]);
 
   useEffect(() => {
     const el = viewportRef.current;
@@ -196,14 +250,20 @@ export function ZoomPanSurface({
       <div
         role="application"
         aria-label="확대 및 이동 영역"
-        className="flex h-full w-full items-center justify-center"
+        className={[
+          "flex h-full w-full min-h-0",
+          stretchContent ? "items-stretch justify-center" : "items-center justify-center",
+        ].join(" ")}
         onPointerDown={navigationMode ? onPointerDown : undefined}
         onPointerMove={navigationMode ? onPointerMove : undefined}
         onPointerUp={navigationMode ? endPointer : undefined}
         onPointerCancel={navigationMode ? endPointer : undefined}
       >
         <div
-          className="will-change-transform"
+          className={[
+            "will-change-transform",
+            stretchContent ? "flex h-full min-h-0 w-full max-w-full justify-center" : "",
+          ].join(" ")}
           style={{
             transform: `translate(${pan.x}px, ${pan.y}px) scale(${scale})`,
             transformOrigin: "center center",

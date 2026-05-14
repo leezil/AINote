@@ -13,7 +13,7 @@ import { toJpeg } from "html-to-image";
 import type { StoredDocumentMeta } from "@/lib/storage/document-store";
 import type { AskRequest } from "@/lib/ai/ask-schema";
 import { inferPdfMaterialIntentFromQuestion } from "@/lib/ai/scope-intent";
-import { InkOverlay, type InkOverlayHandle } from "@/components/ink/InkOverlay";
+import { InkOverlay, type InkOverlayHandle, type ZoomPanTouchBridge } from "@/components/ink/InkOverlay";
 import { ZoomPanSurface } from "@/components/workspace/ZoomPanSurface";
 
 const PdfClientView = dynamic(
@@ -25,6 +25,7 @@ const defaultWorkspaceId =
   process.env.NEXT_PUBLIC_DEFAULT_WORKSPACE_ID?.trim() || "local";
 
 const FULLSCREEN_AI_WIDTH_KEY = "ainote:fullscreenAiWidth";
+const AI_LAYOUT_STORAGE_KEY = "ainote:aiLayoutV2";
 
 type PdfAskMode =
   | "auto_material"
@@ -32,6 +33,10 @@ type PdfAskMode =
   | "force_full_document"
   | "current_page_plus_capture"
   | "capture_only";
+
+type PenTool = "ink" | "erase";
+type AiPanelSide = "left" | "right";
+type AiLandscapeStack = "bottom" | "top";
 
 export function WorkspaceApp() {
   const [documents, setDocuments] = useState<StoredDocumentMeta[]>([]);
@@ -50,17 +55,176 @@ export function WorkspaceApp() {
   const [error, setError] = useState<string | null>(null);
   /** 문서 뷰어를 뷰포트에 고정하고 AI 패널을 우측(가로) 또는 하단(세로)에 둠 */
   const [viewerFullscreen, setViewerFullscreen] = useState(false);
-  /** true: 필기 / false: 확대·축소·이동(캡처 영역은 동일) */
-  const [gestureInk, setGestureInk] = useState(true);
+  /** ink / erase — 이동·확대는 손가락·핀치로 자동 */
+  const [penTool, setPenTool] = useState<PenTool>("ink");
+  /** 전체화면 md 가로: AI를 아래(기본) 또는 위 */
+  const [aiLandscapeStack, setAiLandscapeStack] = useState<AiLandscapeStack>("bottom");
+  /** 전체화면 md 세로(가로 분할): AI를 오른쪽(기본) 또는 왼쪽 */
+  const [aiPanelSide, setAiPanelSide] = useState<AiPanelSide>("right");
+  const [layoutViewport, setLayoutViewport] = useState({ w: 0, h: 0 });
   /** 전체화면에서 AI 패널 표시 (가로 레이아웃에서 토글·리사이즈 대상) */
   const [fullscreenAiOpen, setFullscreenAiOpen] = useState(true);
   const [aiPanelWidthPx, setAiPanelWidthPx] = useState(380);
   const [isMdUp, setIsMdUp] = useState(false);
-  /** 손가락(touch)으로도 필기 — 기본은 펜·마우스만 */
-  const [allowFingerInk, setAllowFingerInk] = useState(false);
-  const aiResizeRef = useRef<{ startX: number; startW: number } | null>(null);
-  /** 이동·확대 모드에서 CSS scale — PDF 캔버스 DPR 보정에 사용 */
-  const [viewerZoomScale, setViewerZoomScale] = useState(1);
+  /** 이동·확대 모드에서 CSS scale — PDF DPR 보정(일반/전체화면 각각 유지) */
+  const [zoomScaleWin, setZoomScaleWin] = useState(1);
+  const [zoomScaleFs, setZoomScaleFs] = useState(1);
+  const touchPanBridgeRef = useRef<ZoomPanTouchBridge | null>(null);
+  const [inkColor, setInkColor] = useState("#2563eb");
+  const [inkWidth, setInkWidth] = useState(2.8);
+  const [eraserRadius, setEraserRadius] = useState(18);
+
+  const navigationMode = true;
+  const inkLayerActive = Boolean(activeId);
+  const viewportPdfScale = viewerFullscreen ? zoomScaleFs : zoomScaleWin;
+  const isFsLandscapeSplit =
+    viewerFullscreen && isMdUp && layoutViewport.w > 0 && layoutViewport.w > layoutViewport.h;
+  const fsOrderSwap =
+    (viewerFullscreen && isMdUp && isFsLandscapeSplit && aiLandscapeStack === "top") ||
+    (viewerFullscreen && isMdUp && !isFsLandscapeSplit && aiPanelSide === "left");
+
+  const handleViewerScaleChange = useCallback(
+    (s: number) => {
+      if (viewerFullscreen) setZoomScaleFs(s);
+      else setZoomScaleWin(s);
+    },
+    [viewerFullscreen],
+  );
+
+  const aiPanelWidthRef = useRef(aiPanelWidthPx);
+  aiPanelWidthRef.current = aiPanelWidthPx;
+  const aiPanelSideRef = useRef(aiPanelSide);
+  aiPanelSideRef.current = aiPanelSide;
+  const aiLandscapeStackRef = useRef(aiLandscapeStack);
+  aiLandscapeStackRef.current = aiLandscapeStack;
+  const aiResizeModeRef = useRef<"row" | "colBottom" | "colTop">("row");
+  const aiResizeDragRef = useRef<{ startClient: number; startSpan: number } | null>(null);
+  const aiResizeListenersRef = useRef<{
+    move: (ev: PointerEvent) => void;
+    up: (ev: PointerEvent) => void;
+  } | null>(null);
+
+  const clampAiSpanRow = useCallback((w: number) => {
+    const maxW = Math.min(Math.floor(window.innerWidth * 0.58), 720);
+    return Math.min(maxW, Math.max(260, w));
+  }, []);
+
+  const clampAiSpanCol = useCallback((h: number) => {
+    return Math.min(Math.floor(window.innerHeight * 0.72), Math.max(160, h));
+  }, []);
+
+  const saveAiLayoutToStorage = useCallback(
+    (spanOverride?: number, o?: { side?: AiPanelSide; stack?: AiLandscapeStack }) => {
+      const span = spanOverride ?? aiPanelWidthRef.current;
+      const side = o?.side ?? aiPanelSideRef.current;
+      const stack = o?.stack ?? aiLandscapeStackRef.current;
+      try {
+        sessionStorage.setItem(
+          AI_LAYOUT_STORAGE_KEY,
+          JSON.stringify({
+            span,
+            side,
+            stack,
+          }),
+        );
+      } catch {
+        // ignore
+      }
+    },
+    [],
+  );
+
+  const detachAiResizeListeners = useCallback(() => {
+    const L = aiResizeListenersRef.current;
+    if (!L) return;
+    window.removeEventListener("pointermove", L.move);
+    window.removeEventListener("pointerup", L.up);
+    window.removeEventListener("pointercancel", L.up);
+    aiResizeListenersRef.current = null;
+    aiResizeDragRef.current = null;
+  }, []);
+
+  const onAiDividerPointerDown = useCallback(
+    (e: React.PointerEvent<HTMLDivElement>) => {
+      e.preventDefault();
+      e.stopPropagation();
+      if (aiResizeListenersRef.current) return;
+
+      const w = window.innerWidth;
+      const h = window.innerHeight;
+      const landscape = viewerFullscreen && isMdUp && w > h;
+      if (landscape) {
+        aiResizeModeRef.current = aiLandscapeStackRef.current === "bottom" ? "colBottom" : "colTop";
+        aiResizeDragRef.current = {
+          startClient: e.clientY,
+          startSpan: aiPanelWidthRef.current,
+        };
+      } else {
+        aiResizeModeRef.current = "row";
+        aiResizeDragRef.current = {
+          startClient: e.clientX,
+          startSpan: aiPanelWidthRef.current,
+        };
+      }
+
+      const move = (ev: PointerEvent) => {
+        const s = aiResizeDragRef.current;
+        if (!s) return;
+        ev.preventDefault();
+        const mode = aiResizeModeRef.current;
+        let next: number;
+        if (mode === "row") {
+          const dx = ev.clientX - s.startClient;
+          const dRow = aiPanelSideRef.current === "left" ? dx : -dx;
+          next = clampAiSpanRow(s.startSpan + dRow);
+        } else if (mode === "colBottom") {
+          next = clampAiSpanCol(s.startSpan + (ev.clientY - s.startClient));
+        } else {
+          next = clampAiSpanCol(s.startSpan - (ev.clientY - s.startClient));
+        }
+        setAiPanelWidthPx(next);
+      };
+
+      const upWrapped = (ev: PointerEvent) => {
+        const s = aiResizeDragRef.current;
+        const mode = aiResizeModeRef.current;
+        let next = aiPanelWidthRef.current;
+        if (s) {
+          if (mode === "row") {
+            const dx = ev.clientX - s.startClient;
+            const dRow = aiPanelSideRef.current === "left" ? dx : -dx;
+            next = clampAiSpanRow(s.startSpan + dRow);
+          } else if (mode === "colBottom") {
+            next = clampAiSpanCol(s.startSpan + (ev.clientY - s.startClient));
+          } else {
+            next = clampAiSpanCol(s.startSpan - (ev.clientY - s.startClient));
+          }
+          setAiPanelWidthPx(next);
+        }
+        detachAiResizeListeners();
+        saveAiLayoutToStorage(next);
+      };
+
+      aiResizeListenersRef.current = { move, up: upWrapped };
+      window.addEventListener("pointermove", move, { passive: false });
+      window.addEventListener("pointerup", upWrapped);
+      window.addEventListener("pointercancel", upWrapped);
+    },
+    [
+      viewerFullscreen,
+      isMdUp,
+      clampAiSpanRow,
+      clampAiSpanCol,
+      detachAiResizeListeners,
+      saveAiLayoutToStorage,
+    ],
+  );
+
+  useEffect(() => {
+    return () => {
+      detachAiResizeListeners();
+    };
+  }, [detachAiResizeListeners]);
 
   const workspaceHeaders = useMemo(
     () => ({ "x-workspace-id": defaultWorkspaceId }),
@@ -96,13 +260,29 @@ export function WorkspaceApp() {
 
   useEffect(() => {
     try {
-      const raw = sessionStorage.getItem(FULLSCREEN_AI_WIDTH_KEY);
-      if (!raw) return;
-      const n = Number.parseInt(raw, 10);
-      if (Number.isFinite(n) && n >= 260 && n <= 1200) setAiPanelWidthPx(n);
+      const raw = sessionStorage.getItem(AI_LAYOUT_STORAGE_KEY);
+      if (raw) {
+        const o = JSON.parse(raw) as { span?: number; side?: string; stack?: string };
+        if (typeof o.span === "number" && o.span >= 160 && o.span <= 1200) setAiPanelWidthPx(o.span);
+        if (o.side === "left" || o.side === "right") setAiPanelSide(o.side);
+        if (o.stack === "top" || o.stack === "bottom") setAiLandscapeStack(o.stack);
+        return;
+      }
+      const legacy = sessionStorage.getItem(FULLSCREEN_AI_WIDTH_KEY);
+      if (legacy) {
+        const n = Number.parseInt(legacy, 10);
+        if (Number.isFinite(n) && n >= 260 && n <= 1200) setAiPanelWidthPx(n);
+      }
     } catch {
       // ignore
     }
+  }, []);
+
+  useEffect(() => {
+    const sync = () => setLayoutViewport({ w: window.innerWidth, h: window.innerHeight });
+    sync();
+    window.addEventListener("resize", sync);
+    return () => window.removeEventListener("resize", sync);
   }, []);
 
   useEffect(() => {
@@ -112,41 +292,6 @@ export function WorkspaceApp() {
     mq.addEventListener("change", sync);
     return () => mq.removeEventListener("change", sync);
   }, []);
-
-  const clampAiPanelWidth = useCallback((w: number) => {
-    const maxW = Math.min(Math.floor(window.innerWidth * 0.58), 720);
-    return Math.min(maxW, Math.max(260, w));
-  }, []);
-
-  const onAiDividerPointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
-    e.preventDefault();
-    aiResizeRef.current = { startX: e.clientX, startW: aiPanelWidthPx };
-    (e.currentTarget as HTMLDivElement).setPointerCapture(e.pointerId);
-  };
-
-  const onAiDividerPointerMove = (e: React.PointerEvent<HTMLDivElement>) => {
-    const s = aiResizeRef.current;
-    if (!s) return;
-    setAiPanelWidthPx(clampAiPanelWidth(s.startW + (e.clientX - s.startX)));
-  };
-
-  const onAiDividerPointerUp = (e: React.PointerEvent<HTMLDivElement>) => {
-    const s = aiResizeRef.current;
-    aiResizeRef.current = null;
-    try {
-      (e.currentTarget as HTMLDivElement).releasePointerCapture(e.pointerId);
-    } catch {
-      // ignore
-    }
-    if (!s) return;
-    const next = clampAiPanelWidth(s.startW + (e.clientX - s.startX));
-    setAiPanelWidthPx(next);
-    try {
-      sessionStorage.setItem(FULLSCREEN_AI_WIDTH_KEY, String(next));
-    } catch {
-      // ignore
-    }
-  };
 
   const activeMeta = useMemo(
     () => documents.find((d) => d.id === activeId) ?? null,
@@ -399,7 +544,10 @@ export function WorkspaceApp() {
         className={[
           "flex min-h-0 min-w-0 flex-1",
           viewerFullscreen
-            ? "fixed inset-0 z-50 m-0 h-[100dvh] max-w-none flex-col bg-white p-0 dark:bg-zinc-950 md:flex-row md:gap-0"
+            ? [
+                "fixed inset-0 z-50 m-0 h-[100dvh] max-w-none flex-col bg-white p-0 dark:bg-zinc-950",
+                isMdUp && !isFsLandscapeSplit ? "md:flex-row md:gap-0" : "",
+              ].join(" ")
             : "flex-col gap-3",
         ].join(" ")}
       >
@@ -407,7 +555,16 @@ export function WorkspaceApp() {
           className={[
             "flex min-h-0 flex-col overflow-hidden border border-zinc-200 bg-white shadow-sm dark:border-zinc-800 dark:bg-zinc-950",
             viewerFullscreen
-              ? "min-h-0 flex-1 rounded-none border-0 shadow-none md:min-h-0"
+              ? [
+                  "min-h-0 flex-1 rounded-none border-0 shadow-none md:min-h-0",
+                  viewerFullscreen && fullscreenAiOpen
+                    ? fsOrderSwap
+                      ? "order-3"
+                      : "order-1"
+                    : "",
+                ]
+                  .filter(Boolean)
+                  .join(" ")
               : "flex-1 rounded-xl",
           ].join(" ")}
         >
@@ -444,11 +601,11 @@ export function WorkspaceApp() {
                 type="button"
                 className={[
                   "rounded-md border px-2 py-1 text-sm",
-                  gestureInk
+                  penTool === "ink"
                     ? "border-zinc-900 bg-zinc-900 text-white dark:border-zinc-100 dark:bg-zinc-100 dark:text-zinc-900"
                     : "border-zinc-200 dark:border-zinc-700",
                 ].join(" ")}
-                onClick={() => setGestureInk(true)}
+                onClick={() => setPenTool("ink")}
               >
                 필기
               </button>
@@ -456,32 +613,132 @@ export function WorkspaceApp() {
                 type="button"
                 className={[
                   "rounded-md border px-2 py-1 text-sm",
-                  !gestureInk
+                  penTool === "erase"
                     ? "border-zinc-900 bg-zinc-900 text-white dark:border-zinc-100 dark:bg-zinc-100 dark:text-zinc-900"
                     : "border-zinc-200 dark:border-zinc-700",
                 ].join(" ")}
-                onClick={() => setGestureInk(false)}
+                onClick={() => setPenTool("erase")}
               >
-                이동·확대
+                지우개
               </button>
+              {viewerFullscreen && isMdUp ? (
+                isFsLandscapeSplit ? (
+                  <span className="flex flex-wrap gap-1">
+                    <button
+                      type="button"
+                      className={[
+                        "rounded-md border px-2 py-1 text-xs",
+                        aiLandscapeStack === "bottom"
+                          ? "border-zinc-900 bg-zinc-900 text-white dark:border-zinc-100 dark:bg-zinc-100 dark:text-zinc-900"
+                          : "border-zinc-200 dark:border-zinc-700",
+                      ].join(" ")}
+                      onClick={() => {
+                        setAiLandscapeStack("bottom");
+                        saveAiLayoutToStorage(undefined, { stack: "bottom" });
+                      }}
+                    >
+                      AI 하단
+                    </button>
+                    <button
+                      type="button"
+                      className={[
+                        "rounded-md border px-2 py-1 text-xs",
+                        aiLandscapeStack === "top"
+                          ? "border-zinc-900 bg-zinc-900 text-white dark:border-zinc-100 dark:bg-zinc-100 dark:text-zinc-900"
+                          : "border-zinc-200 dark:border-zinc-700",
+                      ].join(" ")}
+                      onClick={() => {
+                        setAiLandscapeStack("top");
+                        saveAiLayoutToStorage(undefined, { stack: "top" });
+                      }}
+                    >
+                      AI 상단
+                    </button>
+                  </span>
+                ) : (
+                  <span className="flex flex-wrap gap-1">
+                    <button
+                      type="button"
+                      className={[
+                        "rounded-md border px-2 py-1 text-xs",
+                        aiPanelSide === "right"
+                          ? "border-zinc-900 bg-zinc-900 text-white dark:border-zinc-100 dark:bg-zinc-100 dark:text-zinc-900"
+                          : "border-zinc-200 dark:border-zinc-700",
+                      ].join(" ")}
+                      onClick={() => {
+                        setAiPanelSide("right");
+                        saveAiLayoutToStorage(undefined, { side: "right" });
+                      }}
+                    >
+                      AI 오른쪽
+                    </button>
+                    <button
+                      type="button"
+                      className={[
+                        "rounded-md border px-2 py-1 text-xs",
+                        aiPanelSide === "left"
+                          ? "border-zinc-900 bg-zinc-900 text-white dark:border-zinc-100 dark:bg-zinc-100 dark:text-zinc-900"
+                          : "border-zinc-200 dark:border-zinc-700",
+                      ].join(" ")}
+                      onClick={() => {
+                        setAiPanelSide("left");
+                        saveAiLayoutToStorage(undefined, { side: "left" });
+                      }}
+                    >
+                      AI 왼쪽
+                    </button>
+                  </span>
+                )
+              ) : null}
+              {inkLayerActive ? (
+                <span className="flex flex-wrap items-center gap-1.5">
+                  <label className="flex items-center gap-1 text-xs text-zinc-600 dark:text-zinc-400">
+                    색
+                    <input
+                      type="color"
+                      value={inkColor}
+                      onChange={(e) => setInkColor(e.target.value)}
+                      className="h-7 w-8 cursor-pointer rounded border border-zinc-300 bg-white p-0 dark:border-zinc-600"
+                      title="펜 색"
+                    />
+                  </label>
+                  <label className="flex items-center gap-1 text-xs text-zinc-600 dark:text-zinc-400">
+                    굵기
+                    <input
+                      type="range"
+                      min={1}
+                      max={12}
+                      step={0.5}
+                      value={inkWidth}
+                      onChange={(e) => setInkWidth(Number(e.target.value))}
+                      className="w-20"
+                      title="펜 굵기"
+                    />
+                  </label>
+                  {penTool === "erase" ? (
+                    <label className="flex items-center gap-1 text-xs text-zinc-600 dark:text-zinc-400">
+                      지우개
+                      <input
+                        type="range"
+                        min={4}
+                        max={48}
+                        step={1}
+                        value={eraserRadius}
+                        onChange={(e) => setEraserRadius(Number(e.target.value))}
+                        className="w-20"
+                        title="지우개 크기"
+                      />
+                    </label>
+                  ) : null}
+                </span>
+              ) : null}
               <button
                 type="button"
                 className="rounded-md border border-zinc-200 px-2 py-1 text-sm dark:border-zinc-700"
                 onClick={() => inkRef.current?.clear()}
               >
-                필기 지우기
+                전체 지우기
               </button>
-              {gestureInk ? (
-                <label className="flex cursor-pointer items-center gap-1.5 text-xs text-zinc-600 dark:text-zinc-400">
-                  <input
-                    type="checkbox"
-                    className="rounded border-zinc-300 dark:border-zinc-600"
-                    checked={allowFingerInk}
-                    onChange={(e) => setAllowFingerInk(e.target.checked)}
-                  />
-                  손가락 필기
-                </label>
-              ) : null}
               {viewerFullscreen ? (
                 fullscreenAiOpen ? (
                   <button
@@ -521,24 +778,41 @@ export function WorkspaceApp() {
               <p className="p-6 text-sm text-zinc-500">왼쪽에서 파일을 업로드하고 탭을 선택하세요.</p>
             ) : (
               <ZoomPanSurface
-                navigationMode={!gestureInk}
+                key={viewerFullscreen ? "zoom-fs" : "zoom-win"}
+                navigationMode={navigationMode}
                 className={viewerFullscreen ? "h-full min-h-0" : "min-h-[320px]"}
-                onScaleChange={setViewerZoomScale}
-                viewResetKey={
-                  activeMeta
-                    ? `${activeMeta.id}-${currentPage}-${viewerFullscreen ? 1 : 0}`
-                    : "none"
-                }
+                initialScale={viewerFullscreen ? zoomScaleFs : zoomScaleWin}
+                onScaleChange={handleViewerScaleChange}
+                touchBridgeRef={touchPanBridgeRef}
+                stretchContent={viewerFullscreen && inkLayerActive}
+                viewResetKey={activeMeta ? `${activeMeta.id}-${currentPage}` : "none"}
               >
-                <div ref={captureRef} className="relative mx-auto min-h-[480px] w-max max-w-full">
+                <div
+                  ref={captureRef}
+                  className={[
+                    "relative mx-auto max-w-full",
+                    viewerFullscreen && inkLayerActive
+                      ? "flex h-full min-h-0 w-full flex-1 flex-col"
+                      : viewerFullscreen
+                        ? "min-h-0 w-full"
+                        : "min-h-[480px] w-max",
+                  ].join(" ")}
+                >
                   {activeMeta.kind === "pdf" ? (
-                    <PdfClientView
+                    <div
+                      className={
+                        viewerFullscreen && inkLayerActive
+                          ? "flex min-h-0 flex-1 justify-center overflow-auto"
+                          : ""
+                      }
+                    >
+                      <PdfClientView
                       key={activeMeta.id}
                       fileUrl={fileUrl}
                       pageNumber={currentPage}
                       maxWidthPx={viewerFullscreen ? 8192 : 1280}
                       wideMode={viewerFullscreen}
-                      viewportScale={viewerZoomScale}
+                      viewportScale={viewportPdfScale}
                       onPdfLoaded={(n) => {
                         setPdfNumPagesByDoc((prev) => ({
                           ...prev,
@@ -551,8 +825,14 @@ export function WorkspaceApp() {
                         });
                       }}
                     />
+                    </div>
                   ) : activeMeta.kind === "image" ? (
-                    <div className="flex justify-center p-2">
+                    <div
+                      className={[
+                        "flex justify-center p-2",
+                        viewerFullscreen && inkLayerActive ? "min-h-0 flex-1 overflow-auto" : "",
+                      ].join(" ")}
+                    >
                       {/* eslint-disable-next-line @next/next/no-img-element */}
                       <img
                         src={fileUrl}
@@ -566,10 +846,14 @@ export function WorkspaceApp() {
                   <InkOverlay
                     ref={inkRef}
                     storageKey={inkStorageKey}
-                    allowFingerInk={allowFingerInk}
+                    tool={penTool === "erase" ? "erase" : "draw"}
+                    strokeColor={inkColor}
+                    strokeWidth={inkWidth}
+                    eraserRadius={eraserRadius}
+                    touchPanBridge={touchPanBridgeRef}
                     className={[
                       "absolute inset-0 z-10",
-                      gestureInk ? "pointer-events-auto" : "pointer-events-none",
+                      inkLayerActive ? "pointer-events-auto" : "pointer-events-none",
                     ].join(" ")}
                   />
                 </div>
@@ -581,13 +865,16 @@ export function WorkspaceApp() {
         {viewerFullscreen && fullscreenAiOpen && isMdUp ? (
           <div
             role="separator"
-            aria-label="AI 패널 너비 조절"
-            aria-orientation="vertical"
-            className="hidden shrink-0 cursor-col-resize touch-none select-none bg-zinc-200 hover:bg-zinc-400 dark:bg-zinc-700 dark:hover:bg-zinc-500 md:block md:w-1.5"
+            aria-label={isFsLandscapeSplit ? "AI 패널 높이 조절" : "AI 패널 너비 조절"}
+            aria-orientation={isFsLandscapeSplit ? "horizontal" : "vertical"}
+            className={[
+              "relative z-20 shrink-0 touch-none select-none bg-zinc-200 hover:bg-zinc-400 dark:bg-zinc-700 dark:hover:bg-zinc-500",
+              "order-2 hidden md:block",
+              isFsLandscapeSplit
+                ? "h-3 w-full cursor-row-resize"
+                : "w-3 cursor-col-resize self-stretch",
+            ].join(" ")}
             onPointerDown={onAiDividerPointerDown}
-            onPointerMove={onAiDividerPointerMove}
-            onPointerUp={onAiDividerPointerUp}
-            onPointerCancel={onAiDividerPointerUp}
           />
         ) : null}
 
@@ -596,12 +883,46 @@ export function WorkspaceApp() {
           className={[
             "border-zinc-200 bg-white dark:border-zinc-800 dark:bg-zinc-950",
             viewerFullscreen
-              ? "flex max-h-[42vh] min-h-0 shrink-0 flex-col overflow-y-auto border-t p-3 md:max-h-none md:shrink-0 md:border-l md:border-t-0 md:p-4"
+              ? [
+                  "flex min-h-0 shrink-0 flex-col overflow-y-auto",
+                  viewerFullscreen && fullscreenAiOpen
+                    ? fsOrderSwap
+                      ? "order-1"
+                      : "order-3"
+                    : "",
+                  isMdUp && isFsLandscapeSplit
+                    ? [
+                        "w-full p-3 md:p-4",
+                        aiLandscapeStack === "top"
+                          ? "border-b border-zinc-200 dark:border-zinc-800"
+                          : "border-t border-zinc-200 dark:border-zinc-800",
+                      ].join(" ")
+                    : isMdUp
+                      ? [
+                          "max-h-[42vh] border-t border-zinc-200 dark:border-zinc-800 md:max-h-none md:border-t-0 md:p-4",
+                          aiPanelSide === "right"
+                            ? "md:border-l md:border-zinc-200 md:dark:border-zinc-800"
+                            : "md:border-r md:border-zinc-200 md:dark:border-zinc-800",
+                        ].join(" ")
+                      : "max-h-[42vh] min-h-0 shrink-0 border-t border-zinc-200 p-3 dark:border-zinc-800",
+                ]
+                  .filter(Boolean)
+                  .join(" ")
               : "rounded-xl border p-3 shadow-sm",
           ].join(" ")}
           style={
             viewerFullscreen && fullscreenAiOpen && isMdUp
-              ? { width: aiPanelWidthPx, minWidth: 260, maxWidth: "min(58vw, 720px)" }
+              ? isFsLandscapeSplit
+                ? {
+                    height: aiPanelWidthPx,
+                    minHeight: 160,
+                    maxHeight: "min(72vh, 900px)",
+                  }
+                : {
+                    width: aiPanelWidthPx,
+                    minWidth: 260,
+                    maxWidth: "min(58vw, 720px)",
+                  }
               : undefined
           }
         >
@@ -707,7 +1028,12 @@ export function WorkspaceApp() {
             <button
               type="button"
               aria-label="AI 패널 열기"
-              className="fixed bottom-6 left-1/2 z-[60] -translate-x-1/2 rounded-full border border-zinc-300 bg-white px-4 py-2 text-sm font-medium text-zinc-800 shadow-md dark:border-zinc-600 dark:bg-zinc-900 dark:text-zinc-100 md:hidden"
+              className={[
+                "fixed z-[60] rounded-full border border-zinc-300 bg-white px-4 py-2 text-sm font-medium text-zinc-800 shadow-md dark:border-zinc-600 dark:bg-zinc-900 dark:text-zinc-100",
+                isFsLandscapeSplit
+                  ? "bottom-6 left-1/2 hidden -translate-x-1/2 md:block"
+                  : "bottom-6 left-1/2 -translate-x-1/2 md:hidden",
+              ].join(" ")}
               onClick={() => setFullscreenAiOpen(true)}
             >
               AI 열기
@@ -715,7 +1041,12 @@ export function WorkspaceApp() {
             <button
               type="button"
               aria-label="AI 패널 열기"
-              className="fixed right-0 top-1/2 z-[60] hidden -translate-y-1/2 rounded-l-lg border border-r-0 border-zinc-300 bg-white px-2 py-6 text-sm font-medium text-zinc-800 shadow-md dark:border-zinc-600 dark:bg-zinc-900 dark:text-zinc-100 md:block"
+              className={[
+                "fixed z-[60] rounded-l-lg border border-r-0 border-zinc-300 bg-white px-2 py-6 text-sm font-medium text-zinc-800 shadow-md dark:border-zinc-600 dark:bg-zinc-900 dark:text-zinc-100",
+                isFsLandscapeSplit
+                  ? "hidden"
+                  : "right-0 top-1/2 hidden -translate-y-1/2 md:block",
+              ].join(" ")}
               onClick={() => setFullscreenAiOpen(true)}
             >
               AI
