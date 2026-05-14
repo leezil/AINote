@@ -10,6 +10,13 @@ import {
   type MutableRefObject,
 } from "react";
 
+import {
+  inkDebugLog,
+  inkPointerDiagnostics,
+  isLikelyStylusAsTouch,
+  readInkDebugFlag,
+} from "@/lib/inkDebug";
+
 export type ZoomPanTouchBridge = {
   beginTouchPan: (clientX: number, clientY: number) => void;
   moveTouchPan: (clientX: number, clientY: number) => void;
@@ -132,6 +139,8 @@ export const InkOverlay = forwardRef<InkOverlayHandle, Props>(function InkOverla
     dpr: 0,
   });
   const roRafRef = useRef<number | null>(null);
+  const moveDebugUntilRef = useRef(0);
+  const ignoredEndLogUntilRef = useRef(0);
 
   const redraw = useCallback(() => {
     const canvas = canvasRef.current;
@@ -351,14 +360,37 @@ export const InkOverlay = forwardRef<InkOverlayHandle, Props>(function InkOverla
         };
       };
 
-      // 펜·마우스·(빈 타입: 일부 스타일러스/WebView)은 항상 필기. touch는 아래에서만 분기.
+      // 펜·마우스·(빈 타입: 일부 스타일러스/WebView)은 항상 필기.
       if (pt === "pen" || pt === "mouse" || pt === "") {
+        if (readInkDebugFlag()) {
+          inkDebugLog("pointerDown", {
+            decision: "draw-pen-mouse-or-empty-type",
+            tool,
+            allowFingerInk,
+            hasBridge: Boolean(bridge),
+            ...inkPointerDiagnostics(e),
+          });
+        }
         beginDrawOrErase();
         return;
       }
 
       if (pt === "touch") {
-        // Apple Pencil 등이 "touch"로 올 수 있어 pen/mouse는 위에서 먼저 처리함.
+        const stylusAsTouch = isLikelyStylusAsTouch(e);
+        if (stylusAsTouch) {
+          if (readInkDebugFlag()) {
+            inkDebugLog("pointerDown", {
+              decision: "draw-touch-as-stylus-heuristic",
+              tool,
+              allowFingerInk,
+              hasBridge: Boolean(bridge),
+              ...inkPointerDiagnostics(e),
+            });
+          }
+          beginDrawOrErase();
+          return;
+        }
+        // 손가락 touch — 패닝 또는(옵션) 손가락 필기
         if (!allowFingerInk && bridge) {
           e.preventDefault();
           touchCoordsRef.current.set(e.pointerId, { x: e.clientX, y: e.clientY });
@@ -388,15 +420,45 @@ export const InkOverlay = forwardRef<InkOverlayHandle, Props>(function InkOverla
           e.currentTarget.setPointerCapture(e.pointerId);
           activeTouchPanId.current = e.pointerId;
           bridge.beginTouchPan(e.clientX, e.clientY);
+          if (readInkDebugFlag()) {
+            inkDebugLog("pointerDown", {
+              decision: "touch-begin-pan",
+              tool,
+              ...inkPointerDiagnostics(e),
+            });
+          }
           return;
         }
         if (allowFingerInk) {
+          if (readInkDebugFlag()) {
+            inkDebugLog("pointerDown", {
+              decision: "draw-finger-ink-enabled",
+              tool,
+              ...inkPointerDiagnostics(e),
+            });
+          }
           beginDrawOrErase();
           return;
+        }
+        if (readInkDebugFlag()) {
+          inkDebugLog("pointerDown", {
+            decision: "touch-ignored-no-finger-ink-no-bridge",
+            tool,
+            hasBridge: Boolean(bridge),
+            ...inkPointerDiagnostics(e),
+          });
         }
         return;
       }
 
+      if (readInkDebugFlag()) {
+        inkDebugLog("pointerDown", {
+          decision: "draw-fallback-unknown-pointer-type",
+          tool,
+          rawPointerType: pt,
+          ...inkPointerDiagnostics(e),
+        });
+      }
       beginDrawOrErase();
     },
     [allowFingerInk, touchPanBridge, tool, strokeColor, strokeWidth, eraserRadius, clientPointFromClient, persist, redraw],
@@ -406,8 +468,33 @@ export const InkOverlay = forwardRef<InkOverlayHandle, Props>(function InkOverla
     (e: React.PointerEvent<HTMLCanvasElement>) => {
       const pt = e.pointerType as string;
       const bridge = touchPanBridge?.current;
+      const drawingThisPointer = activeDrawPointerId.current === e.pointerId;
 
-      if (pt === "touch" && !allowFingerInk) {
+      if (readInkDebugFlag()) {
+        const now = performance.now();
+        if (now >= moveDebugUntilRef.current) {
+          moveDebugUntilRef.current = now + 120;
+          inkDebugLog("pointerMove", {
+            ...inkPointerDiagnostics(e),
+            allowFingerInk,
+            hasBridge: Boolean(bridge),
+            drawingThisPointer,
+            activeTouchPanId: activeTouchPanId.current,
+            inTouchMap: touchCoordsRef.current.has(e.pointerId),
+            tool,
+            branch:
+              pt === "touch" && !allowFingerInk && !drawingThisPointer
+                ? "touch-pan-or-pinch"
+                : !drawingThisPointer
+                  ? "ignored-not-active-draw"
+                  : tool === "erase"
+                    ? "erase-drag"
+                    : "draw-extend",
+          });
+        }
+      }
+
+      if (pt === "touch" && !allowFingerInk && !drawingThisPointer) {
         if (touchCoordsRef.current.has(e.pointerId)) {
           touchCoordsRef.current.set(e.pointerId, { x: e.clientX, y: e.clientY });
         }
@@ -467,8 +554,15 @@ export const InkOverlay = forwardRef<InkOverlayHandle, Props>(function InkOverla
     (e: React.PointerEvent<HTMLCanvasElement>) => {
       const pt = e.pointerType as string;
       const bridge = touchPanBridge?.current;
+      const drawingThisPointer = activeDrawPointerId.current === e.pointerId;
 
-      if (pt === "touch" && !allowFingerInk && bridge) {
+      if (pt === "touch" && !allowFingerInk && bridge && !drawingThisPointer) {
+        if (readInkDebugFlag()) {
+          inkDebugLog("pointerUpOrCancel-touch-pan", {
+            ...inkPointerDiagnostics(e),
+            phase: "touch-pan-end",
+          });
+        }
         if (touchCoordsRef.current.has(e.pointerId)) {
           touchCoordsRef.current.delete(e.pointerId);
         }
@@ -490,8 +584,28 @@ export const InkOverlay = forwardRef<InkOverlayHandle, Props>(function InkOverla
         return;
       }
 
-      if (activeDrawPointerId.current !== e.pointerId) return;
+      if (activeDrawPointerId.current !== e.pointerId) {
+        if (readInkDebugFlag()) {
+          const n = performance.now();
+          if (n >= ignoredEndLogUntilRef.current) {
+            ignoredEndLogUntilRef.current = n + 500;
+            inkDebugLog("pointerUpOrCancel", {
+              decision: "ignored-not-active-draw-pointer",
+              ...inkPointerDiagnostics(e),
+              activeDrawPointerId: activeDrawPointerId.current,
+            });
+          }
+        }
+        return;
+      }
       activeDrawPointerId.current = null;
+
+      if (readInkDebugFlag()) {
+        inkDebugLog("pointerUpOrCancel", {
+          decision: tool === "erase" ? "erase-stroke-end" : "draw-stroke-commit",
+          ...inkPointerDiagnostics(e),
+        });
+      }
 
       if (tool === "erase") {
         try {

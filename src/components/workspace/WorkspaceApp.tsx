@@ -13,6 +13,7 @@ import { toJpeg } from "html-to-image";
 import type { StoredDocumentMeta } from "@/lib/storage/document-store";
 import type { AskRequest } from "@/lib/ai/ask-schema";
 import { inferPdfMaterialIntentFromQuestion } from "@/lib/ai/scope-intent";
+import { inkDebugLog, readInkDebugFlag } from "@/lib/inkDebug";
 import { InkOverlay, type InkOverlayHandle, type ZoomPanTouchBridge } from "@/components/ink/InkOverlay";
 import { WorkspaceDocImage } from "@/components/workspace/WorkspaceDocImage";
 import { ZoomPanSurface } from "@/components/workspace/ZoomPanSurface";
@@ -87,6 +88,25 @@ export function WorkspaceApp() {
   const inkLayerActive = Boolean(activeId);
   const inkPointerActive = inkLayerActive && gestureInk;
   const viewportPdfScale = viewerFullscreen ? zoomScaleFs : zoomScaleWin;
+
+  useEffect(() => {
+    if (!readInkDebugFlag()) return;
+    inkDebugLog("workspace-ink-state", {
+      activeId,
+      inkLayerActive,
+      gestureInk,
+      inkPointerActive,
+      allowFingerInk,
+      penTool,
+      hint: inkPointerActive
+        ? "InkOverlay: pointer-events-auto (이벤트 도달 가능)"
+        : !inkLayerActive
+          ? "문서 미선택 → 잉크 레이어 비활성"
+          : !gestureInk
+            ? "이동·확대 모드 → 잉크 캔버스 pointer-events-none"
+            : "상태 확인 필요",
+    });
+  }, [activeId, inkLayerActive, gestureInk, inkPointerActive, allowFingerInk, penTool]);
   const isMdFsViewport =
     viewerFullscreen && isMdUp && layoutViewport.w > 0;
   /** 세로로 긴 뷰포트(세로 모드): 뷰어·AI 상하 스택 → AI 상단/하단 */
