@@ -1,5 +1,5 @@
-import { GoogleGenerativeAI } from "@google/generative-ai";
-import { getGeminiApiKey, getGeminiModelId } from "@/lib/config/env";
+import { FinishReason, GoogleGenerativeAI } from "@google/generative-ai";
+import { getGeminiApiKey, getGeminiMaxOutputTokens, getGeminiModelId } from "@/lib/config/env";
 
 const DEFAULT_MAX_TEXT_CHARS = 14_000;
 
@@ -58,6 +58,7 @@ const OUTPUT_FORMAT_KO = [
   "4) 원문이 짧은 단어·구만 있어도 [원문] 줄에 적고, 풀이는 [설명·해석]에만 적는다. 두 줄을 한 줄에 합치지 마라.",
   "5) 이미지가 있으면 화면에 보이는 **줄·블록 순서**를 따라 위에서 아래로 맞춘다(위쪽 문제부터).",
   "6) 서론 한두 문장은 허용하되, 본문은 위 형식 위주로 쓴다.",
+  "7) 한 번에 전 페이지를 다 풀기 어렵다면, **앞쪽 번호부터** 완전히 풀고 마지막에 \"이어서 ○○부터 풀겠다\"고 짧게 안내한다(중간에 잘리지 않게).",
 ].join("\n");
 
 export async function askGeminiScoped(input: ScopedAskInput): Promise<string> {
@@ -99,6 +100,9 @@ export async function askGeminiScoped(input: ScopedAskInput): Promise<string> {
   const model = genAI.getGenerativeModel({
     model: modelId,
     systemInstruction,
+    generationConfig: {
+      maxOutputTokens: getGeminiMaxOutputTokens(),
+    },
   });
 
   type Part =
@@ -141,5 +145,15 @@ export async function askGeminiScoped(input: ScopedAskInput): Promise<string> {
     contents: [{ role: "user", parts: userParts }],
   });
 
-  return result.response.text();
+  const response = result.response;
+  const text = response.text();
+  const finish = response.candidates?.[0]?.finishReason;
+  const hitMax = String(finish) === FinishReason.MAX_TOKENS;
+  if (hitMax) {
+    return (
+      text +
+      "\n\n---\n※ 답변이 **출력 토큰 한도**에 도달해 여기서 끊겼을 수 있습니다. 질문을 나누거나, 서버 환경 변수 `GEMINI_MAX_OUTPUT_TOKENS`(최대 65536)를 키워 보세요."
+    );
+  }
+  return text;
 }

@@ -1,12 +1,20 @@
 "use client";
 
 import dynamic from "next/dynamic";
-import { startTransition, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  startTransition,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import { toJpeg } from "html-to-image";
 import type { StoredDocumentMeta } from "@/lib/storage/document-store";
 import type { AskRequest } from "@/lib/ai/ask-schema";
 import { inferPdfMaterialIntentFromQuestion } from "@/lib/ai/scope-intent";
 import { InkOverlay, type InkOverlayHandle } from "@/components/ink/InkOverlay";
+import { ZoomPanSurface } from "@/components/workspace/ZoomPanSurface";
 
 const PdfClientView = dynamic(
   () => import("@/components/pdf/PdfClientView").then((m) => m.PdfClientView),
@@ -15,6 +23,8 @@ const PdfClientView = dynamic(
 
 const defaultWorkspaceId =
   process.env.NEXT_PUBLIC_DEFAULT_WORKSPACE_ID?.trim() || "local";
+
+const FULLSCREEN_AI_WIDTH_KEY = "ainote:fullscreenAiWidth";
 
 type PdfAskMode =
   | "auto_material"
@@ -38,6 +48,17 @@ export function WorkspaceApp() {
   const [answer, setAnswer] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  /** 문서 뷰어를 뷰포트에 고정하고 AI 패널을 우측(가로) 또는 하단(세로)에 둠 */
+  const [viewerFullscreen, setViewerFullscreen] = useState(false);
+  /** true: 필기 / false: 확대·축소·이동(캡처 영역은 동일) */
+  const [gestureInk, setGestureInk] = useState(true);
+  /** 전체화면에서 AI 패널 표시 (가로 레이아웃에서 토글·리사이즈 대상) */
+  const [fullscreenAiOpen, setFullscreenAiOpen] = useState(true);
+  const [aiPanelWidthPx, setAiPanelWidthPx] = useState(380);
+  const [isMdUp, setIsMdUp] = useState(false);
+  /** 손가락(touch)으로도 필기 — 기본은 펜·마우스만 */
+  const [allowFingerInk, setAllowFingerInk] = useState(false);
+  const aiResizeRef = useRef<{ startX: number; startW: number } | null>(null);
 
   const workspaceHeaders = useMemo(
     () => ({ "x-workspace-id": defaultWorkspaceId }),
@@ -56,6 +77,74 @@ export function WorkspaceApp() {
       void refreshDocuments();
     });
   }, [refreshDocuments]);
+
+  useEffect(() => {
+    if (!viewerFullscreen) return;
+    const prev = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setViewerFullscreen(false);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => {
+      document.body.style.overflow = prev;
+      window.removeEventListener("keydown", onKey);
+    };
+  }, [viewerFullscreen]);
+
+  useEffect(() => {
+    try {
+      const raw = sessionStorage.getItem(FULLSCREEN_AI_WIDTH_KEY);
+      if (!raw) return;
+      const n = Number.parseInt(raw, 10);
+      if (Number.isFinite(n) && n >= 260 && n <= 1200) setAiPanelWidthPx(n);
+    } catch {
+      // ignore
+    }
+  }, []);
+
+  useEffect(() => {
+    const mq = window.matchMedia("(min-width: 768px)");
+    const sync = () => setIsMdUp(mq.matches);
+    sync();
+    mq.addEventListener("change", sync);
+    return () => mq.removeEventListener("change", sync);
+  }, []);
+
+  const clampAiPanelWidth = useCallback((w: number) => {
+    const maxW = Math.min(Math.floor(window.innerWidth * 0.58), 720);
+    return Math.min(maxW, Math.max(260, w));
+  }, []);
+
+  const onAiDividerPointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
+    e.preventDefault();
+    aiResizeRef.current = { startX: e.clientX, startW: aiPanelWidthPx };
+    (e.currentTarget as HTMLDivElement).setPointerCapture(e.pointerId);
+  };
+
+  const onAiDividerPointerMove = (e: React.PointerEvent<HTMLDivElement>) => {
+    const s = aiResizeRef.current;
+    if (!s) return;
+    setAiPanelWidthPx(clampAiPanelWidth(s.startW + (e.clientX - s.startX)));
+  };
+
+  const onAiDividerPointerUp = (e: React.PointerEvent<HTMLDivElement>) => {
+    const s = aiResizeRef.current;
+    aiResizeRef.current = null;
+    try {
+      (e.currentTarget as HTMLDivElement).releasePointerCapture(e.pointerId);
+    } catch {
+      // ignore
+    }
+    if (!s) return;
+    const next = clampAiPanelWidth(s.startW + (e.clientX - s.startX));
+    setAiPanelWidthPx(next);
+    try {
+      sessionStorage.setItem(FULLSCREEN_AI_WIDTH_KEY, String(next));
+    } catch {
+      // ignore
+    }
+  };
 
   const activeMeta = useMemo(
     () => documents.find((d) => d.id === activeId) ?? null,
@@ -234,8 +323,20 @@ export function WorkspaceApp() {
     : "ainote:ink:none";
 
   return (
-    <div className="mx-auto flex min-h-0 w-full max-w-6xl flex-1 flex-col gap-3 p-3 md:flex-row md:gap-4 md:p-4">
-      <aside className="flex w-full shrink-0 flex-col gap-2 md:w-56">
+    <div
+      className={[
+        "mx-auto flex min-h-0 w-full flex-1",
+        viewerFullscreen
+          ? "max-w-none flex-col p-0"
+          : "max-w-6xl flex-col gap-3 p-3 md:flex-row md:gap-4 md:p-4",
+      ].join(" ")}
+    >
+      <aside
+        className={[
+          viewerFullscreen ? "hidden" : "flex",
+          "w-full shrink-0 flex-col gap-2 md:w-56",
+        ].join(" ")}
+      >
         <div className="rounded-xl border border-zinc-200 bg-white p-3 shadow-sm dark:border-zinc-800 dark:bg-zinc-950">
           <p className="text-xs font-medium text-zinc-500">자료</p>
           <label className="mt-2 flex cursor-pointer items-center justify-center rounded-lg border border-dashed border-zinc-300 bg-zinc-50 px-2 py-3 text-sm text-zinc-700 hover:bg-zinc-100 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-200 dark:hover:bg-zinc-800">
@@ -292,8 +393,22 @@ export function WorkspaceApp() {
         </div>
       </aside>
 
-      <main className="flex min-h-0 min-w-0 flex-1 flex-col gap-3">
-        <section className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-xl border border-zinc-200 bg-white shadow-sm dark:border-zinc-800 dark:bg-zinc-950">
+      <main
+        className={[
+          "flex min-h-0 min-w-0 flex-1",
+          viewerFullscreen
+            ? "fixed inset-0 z-50 m-0 h-[100dvh] max-w-none flex-col bg-white p-0 dark:bg-zinc-950 md:flex-row md:gap-0"
+            : "flex-col gap-3",
+        ].join(" ")}
+      >
+        <section
+          className={[
+            "flex min-h-0 flex-col overflow-hidden border border-zinc-200 bg-white shadow-sm dark:border-zinc-800 dark:bg-zinc-950",
+            viewerFullscreen
+              ? "min-h-0 flex-1 rounded-none border-0 shadow-none md:min-h-0"
+              : "flex-1 rounded-xl",
+          ].join(" ")}
+        >
           <header className="flex flex-wrap items-center gap-2 border-b border-zinc-100 px-3 py-2 dark:border-zinc-800">
             {activeMeta?.kind === "pdf" ? (
               <>
@@ -322,7 +437,31 @@ export function WorkspaceApp() {
                 {activeMeta?.filename ?? "문서 없음"}
               </span>
             )}
-            <div className="ml-auto flex gap-2">
+            <div className="ml-auto flex flex-wrap items-center justify-end gap-2">
+              <button
+                type="button"
+                className={[
+                  "rounded-md border px-2 py-1 text-sm",
+                  gestureInk
+                    ? "border-zinc-900 bg-zinc-900 text-white dark:border-zinc-100 dark:bg-zinc-100 dark:text-zinc-900"
+                    : "border-zinc-200 dark:border-zinc-700",
+                ].join(" ")}
+                onClick={() => setGestureInk(true)}
+              >
+                필기
+              </button>
+              <button
+                type="button"
+                className={[
+                  "rounded-md border px-2 py-1 text-sm",
+                  !gestureInk
+                    ? "border-zinc-900 bg-zinc-900 text-white dark:border-zinc-100 dark:bg-zinc-100 dark:text-zinc-900"
+                    : "border-zinc-200 dark:border-zinc-700",
+                ].join(" ")}
+                onClick={() => setGestureInk(false)}
+              >
+                이동·확대
+              </button>
               <button
                 type="button"
                 className="rounded-md border border-zinc-200 px-2 py-1 text-sm dark:border-zinc-700"
@@ -330,55 +469,133 @@ export function WorkspaceApp() {
               >
                 필기 지우기
               </button>
+              {gestureInk ? (
+                <label className="flex cursor-pointer items-center gap-1.5 text-xs text-zinc-600 dark:text-zinc-400">
+                  <input
+                    type="checkbox"
+                    className="rounded border-zinc-300 dark:border-zinc-600"
+                    checked={allowFingerInk}
+                    onChange={(e) => setAllowFingerInk(e.target.checked)}
+                  />
+                  손가락 필기
+                </label>
+              ) : null}
+              {viewerFullscreen ? (
+                fullscreenAiOpen ? (
+                  <button
+                    type="button"
+                    className="rounded-md border border-zinc-200 px-2 py-1 text-sm dark:border-zinc-700"
+                    onClick={() => setFullscreenAiOpen(false)}
+                  >
+                    AI 숨기기
+                  </button>
+                ) : (
+                  <button
+                    type="button"
+                    className="rounded-md border border-zinc-200 px-2 py-1 text-sm dark:border-zinc-700"
+                    onClick={() => setFullscreenAiOpen(true)}
+                  >
+                    AI 열기
+                  </button>
+                )
+              ) : null}
+              <button
+                type="button"
+                className="rounded-md border border-zinc-200 px-2 py-1 text-sm dark:border-zinc-700"
+                onClick={() => setViewerFullscreen((v) => !v)}
+              >
+                {viewerFullscreen ? "전체화면 끄기" : "전체화면"}
+              </button>
             </div>
           </header>
 
-          <div className="relative min-h-[320px] flex-1 overflow-auto bg-zinc-50 dark:bg-zinc-900/40">
+          <div
+            className={[
+              "relative bg-zinc-50 dark:bg-zinc-900/40",
+              viewerFullscreen ? "min-h-0 flex-1 overflow-hidden" : "min-h-[320px] flex-1 overflow-auto",
+            ].join(" ")}
+          >
             {!activeMeta ? (
               <p className="p-6 text-sm text-zinc-500">왼쪽에서 파일을 업로드하고 탭을 선택하세요.</p>
             ) : (
-              <div ref={captureRef} className="relative min-h-[480px] w-full">
-                {activeMeta.kind === "pdf" ? (
-                  <PdfClientView
-                    key={activeMeta.id}
-                    fileUrl={fileUrl}
-                    pageNumber={currentPage}
-                    maxWidthPx={920}
-                    onPdfLoaded={(n) => {
-                      setPdfNumPagesByDoc((prev) => ({
-                        ...prev,
-                        [activeMeta.id]: n,
-                      }));
-                      setPageByDoc((prev) => {
-                        const cur = prev[activeMeta.id] ?? 1;
-                        if (cur <= n) return prev;
-                        return { ...prev, [activeMeta.id]: n };
-                      });
-                    }}
-                  />
-                ) : activeMeta.kind === "image" ? (
-                  <div className="flex justify-center p-2">
-                    {/* eslint-disable-next-line @next/next/no-img-element */}
-                    <img
-                      src={fileUrl}
-                      alt={activeMeta.filename}
-                      className="max-h-[70vh] w-auto max-w-full object-contain"
+              <ZoomPanSurface
+                navigationMode={!gestureInk}
+                className={viewerFullscreen ? "h-full min-h-0" : "min-h-[320px]"}
+              >
+                <div ref={captureRef} className="relative mx-auto min-h-[480px] w-max max-w-full">
+                  {activeMeta.kind === "pdf" ? (
+                    <PdfClientView
+                      key={activeMeta.id}
+                      fileUrl={fileUrl}
+                      pageNumber={currentPage}
+                      maxWidthPx={920}
+                      wideMode={viewerFullscreen}
+                      onPdfLoaded={(n) => {
+                        setPdfNumPagesByDoc((prev) => ({
+                          ...prev,
+                          [activeMeta.id]: n,
+                        }));
+                        setPageByDoc((prev) => {
+                          const cur = prev[activeMeta.id] ?? 1;
+                          if (cur <= n) return prev;
+                          return { ...prev, [activeMeta.id]: n };
+                        });
+                      }}
                     />
-                  </div>
-                ) : (
-                  <TextPreview fileUrl={fileUrl} fetchHeaders={workspaceHeaders} />
-                )}
-                <InkOverlay
-                  ref={inkRef}
-                  storageKey={inkStorageKey}
-                  className="pointer-events-auto absolute inset-0 z-10"
-                />
-              </div>
+                  ) : activeMeta.kind === "image" ? (
+                    <div className="flex justify-center p-2">
+                      {/* eslint-disable-next-line @next/next/no-img-element */}
+                      <img
+                        src={fileUrl}
+                        alt={activeMeta.filename}
+                        className="max-h-[85vh] w-auto max-w-none object-contain md:max-h-[90vh]"
+                      />
+                    </div>
+                  ) : (
+                    <TextPreview fileUrl={fileUrl} fetchHeaders={workspaceHeaders} />
+                  )}
+                  <InkOverlay
+                    ref={inkRef}
+                    storageKey={inkStorageKey}
+                    allowFingerInk={allowFingerInk}
+                    className={[
+                      "absolute inset-0 z-10",
+                      gestureInk ? "pointer-events-auto" : "pointer-events-none",
+                    ].join(" ")}
+                  />
+                </div>
+              </ZoomPanSurface>
             )}
           </div>
         </section>
 
-        <section className="rounded-xl border border-zinc-200 bg-white p-3 shadow-sm dark:border-zinc-800 dark:bg-zinc-950">
+        {viewerFullscreen && fullscreenAiOpen && isMdUp ? (
+          <div
+            role="separator"
+            aria-label="AI 패널 너비 조절"
+            aria-orientation="vertical"
+            className="hidden shrink-0 cursor-col-resize touch-none select-none bg-zinc-200 hover:bg-zinc-400 dark:bg-zinc-700 dark:hover:bg-zinc-500 md:block md:w-1.5"
+            onPointerDown={onAiDividerPointerDown}
+            onPointerMove={onAiDividerPointerMove}
+            onPointerUp={onAiDividerPointerUp}
+            onPointerCancel={onAiDividerPointerUp}
+          />
+        ) : null}
+
+        {(!viewerFullscreen || fullscreenAiOpen) ? (
+        <section
+          className={[
+            "border-zinc-200 bg-white dark:border-zinc-800 dark:bg-zinc-950",
+            viewerFullscreen
+              ? "flex max-h-[42vh] min-h-0 shrink-0 flex-col overflow-y-auto border-t p-3 md:max-h-none md:shrink-0 md:border-l md:border-t-0 md:p-4"
+              : "rounded-xl border p-3 shadow-sm",
+          ].join(" ")}
+          style={
+            viewerFullscreen && fullscreenAiOpen && isMdUp
+              ? { width: aiPanelWidthPx, minWidth: 260, maxWidth: "min(58vw, 720px)" }
+              : undefined
+          }
+        >
           <p className="text-sm font-medium text-zinc-800 dark:text-zinc-100">AI 질문 (버튼을 누를 때만 호출)</p>
           {activeMeta?.kind === "pdf" ? (
             <fieldset className="mt-2 space-y-1 text-sm text-zinc-700 dark:text-zinc-300">
@@ -474,6 +691,28 @@ export function WorkspaceApp() {
             </div>
           ) : null}
         </section>
+        ) : null}
+
+        {viewerFullscreen && !fullscreenAiOpen ? (
+          <>
+            <button
+              type="button"
+              aria-label="AI 패널 열기"
+              className="fixed bottom-6 left-1/2 z-[60] -translate-x-1/2 rounded-full border border-zinc-300 bg-white px-4 py-2 text-sm font-medium text-zinc-800 shadow-md dark:border-zinc-600 dark:bg-zinc-900 dark:text-zinc-100 md:hidden"
+              onClick={() => setFullscreenAiOpen(true)}
+            >
+              AI 열기
+            </button>
+            <button
+              type="button"
+              aria-label="AI 패널 열기"
+              className="fixed right-0 top-1/2 z-[60] hidden -translate-y-1/2 rounded-l-lg border border-r-0 border-zinc-300 bg-white px-2 py-6 text-sm font-medium text-zinc-800 shadow-md dark:border-zinc-600 dark:bg-zinc-900 dark:text-zinc-100 md:block"
+              onClick={() => setFullscreenAiOpen(true)}
+            >
+              AI
+            </button>
+          </>
+        ) : null}
       </main>
     </div>
   );

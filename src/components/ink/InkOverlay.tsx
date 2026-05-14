@@ -26,6 +26,11 @@ type Props = {
   className?: string;
   strokeColor?: string;
   strokeWidth?: number;
+  /**
+   * false(기본): Apple Pencil 등 `pointerType === "pen"`과 데스크톱 마우스만 필기. 손가락(touch)은 무시.
+   * true: 손가락으로도 필기.
+   */
+  allowFingerInk?: boolean;
 };
 
 function distance(a: Point, b: Point): number {
@@ -33,12 +38,13 @@ function distance(a: Point, b: Point): number {
 }
 
 export const InkOverlay = forwardRef<InkOverlayHandle, Props>(function InkOverlay(
-  { storageKey, className, strokeColor = "#2563eb", strokeWidth = 2.4 },
+  { storageKey, className, strokeColor = "#2563eb", strokeWidth = 2.4, allowFingerInk = false },
   ref,
 ) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const strokesRef = useRef<Stroke[]>([]);
   const currentRef = useRef<Stroke | null>(null);
+  const activePointerId = useRef<number | null>(null);
   const [, bump] = useState(0);
 
   const redraw = useCallback(() => {
@@ -129,6 +135,7 @@ export const InkOverlay = forwardRef<InkOverlayHandle, Props>(function InkOverla
       clear: () => {
         strokesRef.current = [];
         currentRef.current = null;
+        activePointerId.current = null;
         persist();
         redraw();
         bump((n) => n + 1);
@@ -145,7 +152,10 @@ export const InkOverlay = forwardRef<InkOverlayHandle, Props>(function InkOverla
   };
 
   const onPointerDown = (e: React.PointerEvent<HTMLCanvasElement>) => {
+    if (!allowFingerInk && e.pointerType === "touch") return;
+    if (!allowFingerInk && e.pointerType !== "pen" && e.pointerType !== "mouse") return;
     e.currentTarget.setPointerCapture(e.pointerId);
+    activePointerId.current = e.pointerId;
     currentRef.current = {
       color: strokeColor,
       width: strokeWidth,
@@ -154,6 +164,7 @@ export const InkOverlay = forwardRef<InkOverlayHandle, Props>(function InkOverla
   };
 
   const onPointerMove = (e: React.PointerEvent<HTMLCanvasElement>) => {
+    if (activePointerId.current !== e.pointerId) return;
     if (!currentRef.current) return;
     const p = clientPoint(e);
     const pts = currentRef.current.points;
@@ -163,7 +174,9 @@ export const InkOverlay = forwardRef<InkOverlayHandle, Props>(function InkOverla
     redraw();
   };
 
-  const endStroke = () => {
+  const endStroke = (e: React.PointerEvent<HTMLCanvasElement>) => {
+    if (activePointerId.current !== e.pointerId) return;
+    activePointerId.current = null;
     if (currentRef.current && currentRef.current.points.length > 1) {
       strokesRef.current.push(currentRef.current);
       persist();

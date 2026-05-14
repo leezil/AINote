@@ -7,7 +7,8 @@ import { createDocumentStore } from "@/lib/storage/document-store";
 import { getWorkspaceContextFromRequestHeaders } from "@/lib/workspace/resolve-workspace";
 
 export const runtime = "nodejs";
-export const maxDuration = 60;
+/** 긴 풀이·PDF 처리 시간. Vercel 플랜별 함수 상한을 넘기면 배포 오류이므로 필요 시 낮추세요. */
+export const maxDuration = 120;
 
 const MAX_TEXT_FILE_CHARS = 20_000;
 const MAX_PDF_FULL_TEXT_CHARS = 80_000;

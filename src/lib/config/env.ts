@@ -37,6 +37,22 @@ export function getGeminiModelId(): string {
   return GEMINI_MODEL_ALIASES[id] ?? id;
 }
 
+const GEMINI_MAX_OUTPUT_TOKENS_DEFAULT = 16_384;
+const GEMINI_MAX_OUTPUT_TOKENS_MIN = 1_024;
+const GEMINI_MAX_OUTPUT_TOKENS_MAX = 65_536;
+
+/**
+ * `generateContent` 출력 토큰 상한. 미설정 시 16384 — 긴 교재 풀이가 중간에 끊기는 경우가 줄어듦.
+ * 모델·플랜별 상한은 Google 정책을 따름.
+ */
+export function getGeminiMaxOutputTokens(): number {
+  const raw = process.env.GEMINI_MAX_OUTPUT_TOKENS?.trim();
+  if (!raw) return GEMINI_MAX_OUTPUT_TOKENS_DEFAULT;
+  const n = Number.parseInt(raw, 10);
+  if (!Number.isFinite(n)) return GEMINI_MAX_OUTPUT_TOKENS_DEFAULT;
+  return Math.min(Math.max(n, GEMINI_MAX_OUTPUT_TOKENS_MIN), GEMINI_MAX_OUTPUT_TOKENS_MAX);
+}
+
 export function getDefaultWorkspaceId(): string {
   return process.env.DEFAULT_WORKSPACE_ID ?? "local";
 }
