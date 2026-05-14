@@ -320,15 +320,53 @@ export const InkOverlay = forwardRef<InkOverlayHandle, Props>(function InkOverla
 
   const onPointerDown = useCallback(
     (e: React.PointerEvent<HTMLCanvasElement>) => {
-      if (e.pointerType === "touch") {
-        if (!allowFingerInk && touchPanBridge?.current) {
+      // DOM/일부 WebView는 빈 문자열을 줄 수 있음. React 타입은 mouse|pen|touch만 포함.
+      const pt = e.pointerType as string;
+      const bridge = touchPanBridge?.current;
+
+      const beginDrawOrErase = () => {
+        e.preventDefault();
+        e.currentTarget.setPointerCapture(e.pointerId);
+        activeDrawPointerId.current = e.pointerId;
+
+        if (tool === "erase") {
+          currentRef.current = null;
+          const p = clientPointFromClient(e.clientX, e.clientY);
+          eraserHoverRef.current = p;
+          const next = eraseStrokesAt(strokesRef.current, p.x, p.y, eraserRadius);
+          if (next.length !== strokesRef.current.length) {
+            strokesRef.current = next;
+            persist();
+            bump((n) => n + 1);
+          }
+          redraw();
+          return;
+        }
+
+        eraserHoverRef.current = null;
+        currentRef.current = {
+          color: strokeColor,
+          width: strokeWidth,
+          points: [clientPointFromClient(e.clientX, e.clientY)],
+        };
+      };
+
+      // 펜·마우스·(빈 타입: 일부 스타일러스/WebView)은 항상 필기. touch는 아래에서만 분기.
+      if (pt === "pen" || pt === "mouse" || pt === "") {
+        beginDrawOrErase();
+        return;
+      }
+
+      if (pt === "touch") {
+        // Apple Pencil 등이 "touch"로 올 수 있어 pen/mouse는 위에서 먼저 처리함.
+        if (!allowFingerInk && bridge) {
           e.preventDefault();
           touchCoordsRef.current.set(e.pointerId, { x: e.clientX, y: e.clientY });
 
           if (touchCoordsRef.current.size >= 2) {
             if (activeTouchPanId.current !== null) {
               const pid = activeTouchPanId.current;
-              touchPanBridge.current.endTouchPan();
+              bridge.endTouchPan();
               activeTouchPanId.current = null;
               try {
                 e.currentTarget.releasePointerCapture(pid);
@@ -341,7 +379,7 @@ export const InkOverlay = forwardRef<InkOverlayHandle, Props>(function InkOverla
               const d0 = Math.hypot(pts[0].x - pts[1].x, pts[0].y - pts[1].y);
               if (d0 > 8) {
                 pinchTouchActive.current = true;
-                touchPanBridge.current.beginPinch?.(d0);
+                bridge.beginPinch?.(d0);
               }
             }
             return;
@@ -349,55 +387,30 @@ export const InkOverlay = forwardRef<InkOverlayHandle, Props>(function InkOverla
 
           e.currentTarget.setPointerCapture(e.pointerId);
           activeTouchPanId.current = e.pointerId;
-          touchPanBridge.current.beginTouchPan(e.clientX, e.clientY);
+          bridge.beginTouchPan(e.clientX, e.clientY);
           return;
         }
-        if (!allowFingerInk) return;
-      }
-
-      if (
-        e.pointerType !== "pen" &&
-        e.pointerType !== "mouse" &&
-        !(e.pointerType === "touch" && allowFingerInk)
-      ) {
-        return;
-      }
-
-      e.preventDefault();
-      e.currentTarget.setPointerCapture(e.pointerId);
-      activeDrawPointerId.current = e.pointerId;
-
-      if (tool === "erase") {
-        currentRef.current = null;
-        const p = clientPointFromClient(e.clientX, e.clientY);
-        eraserHoverRef.current = p;
-        const next = eraseStrokesAt(strokesRef.current, p.x, p.y, eraserRadius);
-        if (next.length !== strokesRef.current.length) {
-          strokesRef.current = next;
-          persist();
-          bump((n) => n + 1);
+        if (allowFingerInk) {
+          beginDrawOrErase();
+          return;
         }
-        redraw();
         return;
       }
 
-      eraserHoverRef.current = null;
-      currentRef.current = {
-        color: strokeColor,
-        width: strokeWidth,
-        points: [clientPointFromClient(e.clientX, e.clientY)],
-      };
+      beginDrawOrErase();
     },
     [allowFingerInk, touchPanBridge, tool, strokeColor, strokeWidth, eraserRadius, clientPointFromClient, persist, redraw],
   );
 
   const onPointerMove = useCallback(
     (e: React.PointerEvent<HTMLCanvasElement>) => {
-      if (e.pointerType === "touch") {
+      const pt = e.pointerType as string;
+      const bridge = touchPanBridge?.current;
+
+      if (pt === "touch" && !allowFingerInk) {
         if (touchCoordsRef.current.has(e.pointerId)) {
           touchCoordsRef.current.set(e.pointerId, { x: e.clientX, y: e.clientY });
         }
-        const bridge = touchPanBridge?.current;
         if (pinchTouchActive.current && touchCoordsRef.current.size >= 2 && bridge) {
           const pts = [...touchCoordsRef.current.values()];
           const d1 = Math.hypot(pts[0].x - pts[1].x, pts[0].y - pts[1].y);
@@ -405,15 +418,13 @@ export const InkOverlay = forwardRef<InkOverlayHandle, Props>(function InkOverla
           return;
         }
         if (
-          !allowFingerInk &&
           activeTouchPanId.current === e.pointerId &&
           touchCoordsRef.current.size === 1 &&
           bridge
         ) {
           bridge.moveTouchPan(e.clientX, e.clientY);
-          return;
         }
-        if (!allowFingerInk) return;
+        return;
       }
 
       if (activeDrawPointerId.current !== e.pointerId) return;
@@ -454,29 +465,29 @@ export const InkOverlay = forwardRef<InkOverlayHandle, Props>(function InkOverla
 
   const endStroke = useCallback(
     (e: React.PointerEvent<HTMLCanvasElement>) => {
-      if (e.pointerType === "touch") {
+      const pt = e.pointerType as string;
+      const bridge = touchPanBridge?.current;
+
+      if (pt === "touch" && !allowFingerInk && bridge) {
         if (touchCoordsRef.current.has(e.pointerId)) {
           touchCoordsRef.current.delete(e.pointerId);
         }
-        const bridge = touchPanBridge?.current;
         if (touchCoordsRef.current.size < 2) {
-          if (pinchTouchActive.current && bridge) {
+          if (pinchTouchActive.current) {
             pinchTouchActive.current = false;
             bridge.endPinch?.();
           }
         }
         if (activeTouchPanId.current === e.pointerId) {
           activeTouchPanId.current = null;
-          bridge?.endTouchPan();
+          bridge.endTouchPan();
           try {
             e.currentTarget.releasePointerCapture(e.pointerId);
           } catch {
             // ignore
           }
         }
-        if (!allowFingerInk || activeDrawPointerId.current !== e.pointerId) {
-          return;
-        }
+        return;
       }
 
       if (activeDrawPointerId.current !== e.pointerId) return;
