@@ -29,6 +29,8 @@ export type Stroke = {
 
 export type InkOverlayHandle = {
   clear: () => void;
+  /** 부모 레이아웃·줌 변경 직후 캔버스 크기·좌표계 재동기화 */
+  syncLayout: () => void;
 };
 
 export type InkTool = "draw" | "erase";
@@ -108,6 +110,12 @@ export const InkOverlay = forwardRef<InkOverlayHandle, Props>(function InkOverla
   const pinchTouchActive = useRef(false);
   const eraserHoverRef = useRef<Point | null>(null);
   const [, bump] = useState(0);
+  const lastAllocRef = useRef<{ cssW: number; cssH: number; dpr: number }>({
+    cssW: 0,
+    cssH: 0,
+    dpr: 0,
+  });
+  const roRafRef = useRef<number | null>(null);
 
   const redraw = useCallback(() => {
     const canvas = canvasRef.current;
@@ -182,13 +190,16 @@ export const InkOverlay = forwardRef<InkOverlayHandle, Props>(function InkOverla
   const resizeToContainer = useCallback(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
-    const parent = canvas.parentElement;
-    if (!parent) return;
-    const rect = parent.getBoundingClientRect();
-    const w = Math.max(1, rect.width);
-    const h = Math.max(1, rect.height);
+    const rect = canvas.getBoundingClientRect();
+    const cw = canvas.clientWidth;
+    const ch = canvas.clientHeight;
+    const w = Math.max(1, Math.round(cw > 0 ? cw : rect.width));
+    const h = Math.max(1, Math.round(ch > 0 ? ch : rect.height));
     const base = window.devicePixelRatio || 1;
     const dpr = Math.min(5, Math.max(1, base * Math.max(1, viewportScale)));
+    const last = lastAllocRef.current;
+    if (last.cssW === w && last.cssH === h && last.dpr === dpr) return;
+    lastAllocRef.current = { cssW: w, cssH: h, dpr };
     canvas.width = Math.floor(w * dpr);
     canvas.height = Math.floor(h * dpr);
     canvas.style.width = `${w}px`;
@@ -200,10 +211,22 @@ export const InkOverlay = forwardRef<InkOverlayHandle, Props>(function InkOverla
 
   useEffect(() => {
     resizeToContainer();
-    const ro = new ResizeObserver(() => resizeToContainer());
+    const ro = new ResizeObserver(() => {
+      if (roRafRef.current != null) return;
+      roRafRef.current = requestAnimationFrame(() => {
+        roRafRef.current = null;
+        resizeToContainer();
+      });
+    });
     const parent = canvasRef.current?.parentElement;
     if (parent) ro.observe(parent);
-    return () => ro.disconnect();
+    return () => {
+      ro.disconnect();
+      if (roRafRef.current != null) {
+        cancelAnimationFrame(roRafRef.current);
+        roRafRef.current = null;
+      }
+    };
   }, [resizeToContainer, viewportScale]);
 
   useEffect(() => {
@@ -228,15 +251,28 @@ export const InkOverlay = forwardRef<InkOverlayHandle, Props>(function InkOverla
         redraw();
         bump((n) => n + 1);
       },
+      syncLayout: () => {
+        lastAllocRef.current = { cssW: 0, cssH: 0, dpr: 0 };
+        resizeToContainer();
+        bump((n) => n + 1);
+      },
     }),
-    [persist, redraw],
+    [persist, redraw, resizeToContainer],
   );
 
   const clientPointFromClient = useCallback((clientX: number, clientY: number): Point => {
     const canvas = canvasRef.current;
     if (!canvas) return { x: 0, y: 0 };
     const rect = canvas.getBoundingClientRect();
-    return { x: clientX - rect.left, y: clientY - rect.top };
+    const cw = canvas.clientWidth;
+    const ch = canvas.clientHeight;
+    /** 조상의 CSS transform scale 등으로 rect(화면) 크기와 layout(client*)가 다를 때 보정 */
+    const sx = rect.width > 0 && cw > 0 ? cw / rect.width : 1;
+    const sy = rect.height > 0 && ch > 0 ? ch / rect.height : 1;
+    return {
+      x: (clientX - rect.left) * sx,
+      y: (clientY - rect.top) * sy,
+    };
   }, []);
 
   function coalescedPointerMoves(

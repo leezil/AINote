@@ -98,7 +98,12 @@ export function WorkspaceApp() {
   );
 
   const aiPanelWidthRef = useRef(aiPanelWidthPx);
-  aiPanelWidthRef.current = aiPanelWidthPx;
+  const aiDividerDraggingRef = useRef(false);
+  const aiResizeRafRef = useRef<number | null>(null);
+  const aiResizePendingSpanRef = useRef<number | null>(null);
+  if (!aiDividerDraggingRef.current) {
+    aiPanelWidthRef.current = aiPanelWidthPx;
+  }
   const aiPanelSideRef = useRef(aiPanelSide);
   aiPanelSideRef.current = aiPanelSide;
   const aiLandscapeStackRef = useRef(aiLandscapeStack);
@@ -148,6 +153,11 @@ export function WorkspaceApp() {
     window.removeEventListener("pointercancel", L.up);
     aiResizeListenersRef.current = null;
     aiResizeDragRef.current = null;
+    aiDividerDraggingRef.current = false;
+    if (aiResizeRafRef.current != null) {
+      cancelAnimationFrame(aiResizeRafRef.current);
+      aiResizeRafRef.current = null;
+    }
   }, []);
 
   const onAiDividerPointerDown = useCallback(
@@ -155,6 +165,8 @@ export function WorkspaceApp() {
       e.preventDefault();
       e.stopPropagation();
       if (aiResizeListenersRef.current) return;
+
+      aiDividerDraggingRef.current = true;
 
       const w = window.innerWidth;
       const h = window.innerHeight;
@@ -189,10 +201,22 @@ export function WorkspaceApp() {
         } else {
           next = clampAiSpanCol(s.startSpan - (ev.clientY - s.startClient));
         }
-        setAiPanelWidthPx(next);
+        aiResizePendingSpanRef.current = next;
+        aiPanelWidthRef.current = next;
+        if (aiResizeRafRef.current == null) {
+          aiResizeRafRef.current = requestAnimationFrame(() => {
+            aiResizeRafRef.current = null;
+            const v = aiResizePendingSpanRef.current;
+            if (v != null) setAiPanelWidthPx(v);
+          });
+        }
       };
 
       const upWrapped = (ev: PointerEvent) => {
+        if (aiResizeRafRef.current != null) {
+          cancelAnimationFrame(aiResizeRafRef.current);
+          aiResizeRafRef.current = null;
+        }
         const s = aiResizeDragRef.current;
         const mode = aiResizeModeRef.current;
         let next = aiPanelWidthRef.current;
@@ -210,6 +234,11 @@ export function WorkspaceApp() {
         }
         detachAiResizeListeners();
         saveAiLayoutToStorage(next);
+        requestAnimationFrame(() => {
+          requestAnimationFrame(() => {
+            inkRef.current?.syncLayout();
+          });
+        });
       };
 
       aiResizeListenersRef.current = { move, up: upWrapped };
