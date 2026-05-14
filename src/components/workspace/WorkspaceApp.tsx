@@ -107,6 +107,21 @@ export function WorkspaceApp() {
             : "상태 확인 필요",
     });
   }, [activeId, inkLayerActive, gestureInk, inkPointerActive, allowFingerInk, penTool]);
+
+  /** 콘솔에서 `__AINOTE_INK_DEBUG__`만 켠 경우에도 안내(로그는 pointer 이벤트 때만 쌓임) */
+  useEffect(() => {
+    let prev = readInkDebugFlag();
+    const id = window.setInterval(() => {
+      const now = readInkDebugFlag();
+      if (now && !prev) {
+        console.info(
+          "[ainote:ink] 디버그 켜짐 — 문서 선택·「필기」모드 확인 후 PDF 위에서 그려 보세요. 상세는 [ainote:ink] 로그(Info). Chrome이면 콘솔 상단 필터에서 Default / Info 포함인지 확인하세요.",
+        );
+      }
+      prev = now;
+    }, 400);
+    return () => clearInterval(id);
+  }, []);
   const isMdFsViewport =
     viewerFullscreen && isMdUp && layoutViewport.w > 0;
   /** 세로로 긴 뷰포트(세로 모드): 뷰어·AI 상하 스택 → AI 상단/하단 */

@@ -5,6 +5,8 @@
  * - 주소에 `?inkDebug=1` 붙이고 새로고침
  * - 콘솔에서 `localStorage.setItem('ainote_ink_debug','1')` 후 새로고침
  * - 콘솔에서 `window.__AINOTE_INK_DEBUG__ = true` (같은 탭에서 즉시 반영)
+ *
+ * 로그는 `console.info`로 남깁니다. Chrome에서 `console.debug`는 기본 필터에서 안 보일 수 있습니다.
  */
 
 export function readInkDebugFlag(): boolean {
@@ -21,8 +23,8 @@ export function readInkDebugFlag(): boolean {
 
 export function inkDebugLog(phase: string, data: Record<string, unknown>): void {
   if (!readInkDebugFlag()) return;
-  // 디버그 전용
-  console.debug(`[ainote:ink] ${phase}`, data);
+  // console.debug는 DevTools 기본 레벨에서 숨겨지는 경우가 많아 info 사용
+  console.info(`[ainote:ink] ${phase}`, data);
 }
 
 /** DOM PointerEvent에서 필기 추적에 쓰는 공통 필드 */
