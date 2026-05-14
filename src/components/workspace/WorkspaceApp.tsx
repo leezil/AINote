@@ -41,6 +41,8 @@ type PdfAskMode =
   | "capture_only";
 
 type PenTool = "ink" | "erase";
+/** 문서 뷰: 이동·확대 vs 필기 — 포인터 경합 방지용 전환 */
+type DocViewMode = "nav" | "ink";
 type AiPanelSide = "left" | "right";
 type AiLandscapeStack = "bottom" | "top";
 
@@ -62,8 +64,9 @@ export function WorkspaceApp() {
   const [error, setError] = useState<string | null>(null);
   /** 문서 뷰어 전체화면 + md */
   const [viewerFullscreen, setViewerFullscreen] = useState(false);
-  /** ink / erase — 이동·확대는 손가락·핀치로 자동 */
+  /** ink / erase (필기 모드에서만 캔버스로 전달) */
   const [penTool, setPenTool] = useState<PenTool>("ink");
+  const [docViewMode, setDocViewMode] = useState<DocViewMode>("ink");
   /** 세로 뷰포트(상하 스택): AI를 아래(기본) 또는 위 */
   const [aiLandscapeStack, setAiLandscapeStack] = useState<AiLandscapeStack>("bottom");
   /** 가로 뷰포트(좌우 분할): AI를 오른쪽(기본) 또는 왼쪽 */
@@ -81,6 +84,7 @@ export function WorkspaceApp() {
   const [eraserRadius, setEraserRadius] = useState(18);
 
   const inkLayerActive = Boolean(activeId);
+  const inkPointerActive = inkLayerActive && docViewMode === "ink";
   const viewportPdfScale = viewerFullscreen ? zoomScaleFs : zoomScaleWin;
   const isMdFsViewport =
     viewerFullscreen && isMdUp && layoutViewport.w > 0;
@@ -266,6 +270,14 @@ export function WorkspaceApp() {
       detachAiResizeListeners();
     };
   }, [detachAiResizeListeners]);
+
+  useEffect(() => {
+    if (docViewMode !== "ink") return;
+    const id = requestAnimationFrame(() => {
+      inkRef.current?.syncLayout();
+    });
+    return () => cancelAnimationFrame(id);
+  }, [docViewMode]);
 
   const workspaceHeaders = useMemo(
     () => ({ "x-workspace-id": defaultWorkspaceId }),
@@ -652,6 +664,30 @@ export function WorkspaceApp() {
                 type="button"
                 className={[
                   "rounded-md border px-2 py-1 text-sm",
+                  docViewMode === "nav"
+                    ? "border-zinc-900 bg-zinc-900 text-white dark:border-zinc-100 dark:bg-zinc-100 dark:text-zinc-900"
+                    : "border-zinc-200 dark:border-zinc-700",
+                ].join(" ")}
+                onClick={() => setDocViewMode("nav")}
+              >
+                {t("workspace.modeNav")}
+              </button>
+              <button
+                type="button"
+                className={[
+                  "rounded-md border px-2 py-1 text-sm",
+                  docViewMode === "ink"
+                    ? "border-zinc-900 bg-zinc-900 text-white dark:border-zinc-100 dark:bg-zinc-100 dark:text-zinc-900"
+                    : "border-zinc-200 dark:border-zinc-700",
+                ].join(" ")}
+                onClick={() => setDocViewMode("ink")}
+              >
+                {t("workspace.modeInk")}
+              </button>
+              <button
+                type="button"
+                className={[
+                  "rounded-md border px-2 py-1 text-sm",
                   penTool === "ink"
                     ? "border-zinc-900 bg-zinc-900 text-white dark:border-zinc-100 dark:bg-zinc-100 dark:text-zinc-900"
                     : "border-zinc-200 dark:border-zinc-700",
@@ -761,6 +797,7 @@ export function WorkspaceApp() {
             ) : (
               <ZoomPanSurface
                 key={viewerFullscreen ? "zoom-fs" : "zoom-win"}
+                navigationMode={docViewMode === "nav"}
                 className={viewerFullscreen ? "h-full min-h-0" : "min-h-[320px]"}
                 initialScale={viewerFullscreen ? zoomScaleFs : zoomScaleWin}
                 onScaleChange={handleViewerScaleChange}
@@ -839,7 +876,7 @@ export function WorkspaceApp() {
                     viewportScale={viewportPdfScale}
                     className={[
                       "absolute inset-0 z-20",
-                      inkLayerActive ? "pointer-events-auto" : "pointer-events-none",
+                      inkPointerActive ? "pointer-events-auto" : "pointer-events-none",
                     ].join(" ")}
                   />
                 </div>

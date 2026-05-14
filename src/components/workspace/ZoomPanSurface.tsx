@@ -1,28 +1,28 @@
 "use client";
 
 import { useI18n } from "@/lib/i18n/LocaleProvider";
-import { useCallback, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+  type PointerEvent as ReactPointerEvent,
+  type ReactNode,
+} from "react";
 
 type Props = {
   children: ReactNode;
-  /** (호환용) 예전 손가락 패닝 — 필기와 충돌 방지로 미사용 */
+  /**
+   * true: 문서 위에 투명 레이어로 한 손 이동·두 손 핀치(필기는 부모에서 pointer-events 끔).
+   * false: 레이어 없음 — 필기만 받음(휠·±버튼으로 확대).
+   */
   navigationMode?: boolean;
   className?: string;
-  /** 뷰포트 배율(예: PDF 캔버스 DPR 보정용). */
   onScaleChange?: (scale: number) => void;
-  /** 마운트 시 복원할 배율(일반/전체화면별로 부모에서 주입). */
   initialScale?: number;
-  /**
-   * 값이 바뀔 때 확대·이동·배율을 초기화(문서 전환 등).
-   */
   viewResetKey?: string | number;
-  /**
-   * 값이 바뀔 때 이동만 초기화(배율 유지). PDF 페이지 넘김 등.
-   */
   panResetKey?: string | number;
-  /** (호환용) 예전 Ink↔줌 브리지 — 제거됨 */
-  touchBridgeRef?: unknown;
-  /** true면 자식 영역을 뷰포트 높이까지 채움(전체화면+필기 시 캔버스 높이 확보). */
   stretchContent?: boolean;
 };
 
@@ -30,12 +30,18 @@ const MIN_SCALE = 0.22;
 const MAX_SCALE = 10;
 const WHEEL_SCALE_STEP = 0.12;
 
+type PinchSession = {
+  d0: number;
+  s0: number;
+};
+
 /**
  * PDF/이미지 영역에 CSS transform 기반 확대·축소·이동.
- * 손가락 패닝/핀치는 제거(필기 캔버스와 포인터 경합 방지). 휠·버튼으로 배율 조절.
+ * `navigationMode`일 때만 포인터 패닝·핀치(필기 모드와 분리).
  */
 export function ZoomPanSurface({
   children,
+  navigationMode = false,
   className,
   onScaleChange,
   initialScale,
@@ -48,14 +54,30 @@ export function ZoomPanSurface({
   const [pan, setPan] = useState({ x: 0, y: 0 });
   const scaleRef = useRef(scale);
   scaleRef.current = scale;
+  const panRef = useRef(pan);
+  panRef.current = pan;
   const viewportRef = useRef<HTMLDivElement | null>(null);
+  const pointers = useRef<Map<number, ReactPointerEvent<HTMLDivElement>>>(new Map());
+  const pinchSession = useRef<PinchSession | null>(null);
+  const panDrag = useRef<{ x: number; y: number; px: number; py: number } | null>(null);
 
   const clampScale = useCallback((s: number) => Math.min(MAX_SCALE, Math.max(MIN_SCALE, s)), []);
 
   const reset = useCallback(() => {
     setScale(1);
     setPan({ x: 0, y: 0 });
+    pinchSession.current = null;
+    panDrag.current = null;
+    pointers.current.clear();
   }, []);
+
+  useEffect(() => {
+    if (!navigationMode) {
+      panDrag.current = null;
+      pinchSession.current = null;
+      pointers.current.clear();
+    }
+  }, [navigationMode]);
 
   useEffect(() => {
     onScaleChange?.(scale);
@@ -65,12 +87,18 @@ export function ZoomPanSurface({
     if (viewResetKey === undefined) return;
     setScale(1);
     setPan({ x: 0, y: 0 });
+    pinchSession.current = null;
+    panDrag.current = null;
+    pointers.current.clear();
     onScaleChange?.(1);
   }, [viewResetKey, onScaleChange]);
 
   useLayoutEffect(() => {
     if (panResetKey === undefined) return;
     setPan({ x: 0, y: 0 });
+    pinchSession.current = null;
+    panDrag.current = null;
+    pointers.current.clear();
   }, [panResetKey]);
 
   useEffect(() => {
@@ -107,7 +135,64 @@ export function ZoomPanSurface({
     return () => el.removeEventListener("wheel", onWheel, true);
   }, [clampScale]);
 
-  const ignorePenUi = (e: React.PointerEvent<HTMLButtonElement>) => {
+  const distance = (a: ReactPointerEvent<HTMLDivElement>, b: ReactPointerEvent<HTMLDivElement>) =>
+    Math.hypot(a.clientX - b.clientX, a.clientY - b.clientY);
+
+  const onPointerDown = (e: ReactPointerEvent<HTMLDivElement>) => {
+    if (!navigationMode) return;
+    pointers.current.set(e.pointerId, e);
+    const list = [...pointers.current.values()];
+    if (list.length === 2) {
+      const [a, b] = list;
+      const d0 = distance(a, b);
+      if (d0 > 8) {
+        pinchSession.current = { d0, s0: scaleRef.current };
+      }
+      panDrag.current = null;
+    } else if (list.length === 1) {
+      pinchSession.current = null;
+      const p = panRef.current;
+      panDrag.current = { x: p.x, y: p.y, px: e.clientX, py: e.clientY };
+      e.currentTarget.setPointerCapture(e.pointerId);
+    }
+  };
+
+  const onPointerMove = (e: ReactPointerEvent<HTMLDivElement>) => {
+    if (!navigationMode) return;
+    if (!pointers.current.has(e.pointerId)) return;
+    pointers.current.set(e.pointerId, e);
+    const list = [...pointers.current.values()];
+
+    if (list.length === 2 && pinchSession.current) {
+      const [a, b] = list;
+      const d1 = distance(a, b);
+      const ps = pinchSession.current;
+      if (d1 > 8 && ps.d0 > 8) {
+        setScale(clampScale(ps.s0 * (d1 / ps.d0)));
+      }
+    } else if (list.length === 1 && panDrag.current && !pinchSession.current) {
+      const d = panDrag.current;
+      setPan({
+        x: d.x + (e.clientX - d.px),
+        y: d.y + (e.clientY - d.py),
+      });
+    }
+  };
+
+  const endPointer = (e: ReactPointerEvent<HTMLDivElement>) => {
+    if (!navigationMode) return;
+    if (!pointers.current.has(e.pointerId)) return;
+    pointers.current.delete(e.pointerId);
+    if (pointers.current.size < 2) pinchSession.current = null;
+    if (pointers.current.size === 0) panDrag.current = null;
+    try {
+      e.currentTarget.releasePointerCapture(e.pointerId);
+    } catch {
+      // ignore
+    }
+  };
+
+  const ignorePenUi = (e: ReactPointerEvent<HTMLButtonElement>) => {
     if (e.pointerType === "pen") {
       e.preventDefault();
       e.stopPropagation();
@@ -148,7 +233,7 @@ export function ZoomPanSurface({
 
       <div
         className={[
-          "flex h-full min-h-0 w-full touch-none",
+          "relative flex h-full min-h-0 w-full touch-none",
           stretchContent ? "items-stretch justify-center" : "items-start justify-center",
         ].join(" ")}
       >
@@ -158,7 +243,10 @@ export function ZoomPanSurface({
             stretchContent
               ? "flex h-full w-full justify-center"
               : "flex w-max min-h-0 max-h-full flex-col items-stretch",
-          ].join(" ")}
+            navigationMode ? "pointer-events-none" : "",
+          ]
+            .filter(Boolean)
+            .join(" ")}
           style={{
             transform: `translate(${pan.x}px, ${pan.y}px) scale(${scale})`,
             transformOrigin: "center center",
@@ -168,6 +256,18 @@ export function ZoomPanSurface({
         >
           {children}
         </div>
+
+        {navigationMode ? (
+          <div
+            role="application"
+            aria-label={t("zoom.regionAria")}
+            className="absolute inset-0 z-[15] touch-none cursor-grab active:cursor-grabbing"
+            onPointerDown={onPointerDown}
+            onPointerMove={onPointerMove}
+            onPointerUp={endPointer}
+            onPointerCancel={endPointer}
+          />
+        ) : null}
       </div>
     </div>
   );
