@@ -52,6 +52,26 @@ function distance(a: Point, b: Point): number {
   return Math.hypot(a.x - b.x, a.y - b.y);
 }
 
+/**
+ * 일부 기기·브라우저는 스타일러스를 `pointerType: "touch"`로 보냅니다.
+ * 손가락은 보통 더 큰 contact ellipse(width/height)를 가집니다.
+ * 크기를 알 수 없을 때는 `(pointer: coarse)` 환경에선 필기 우선(스타일러스 오인 방지),
+ * 데스크톱 터치스크린 등은 기존처럼 손가락=패닝으로 둡니다.
+ */
+function isLikelyFingerTouch(e: React.PointerEvent<HTMLCanvasElement>): boolean {
+  if (e.pointerType !== "touch") return false;
+  const w = e.width ?? 0;
+  const h = e.height ?? 0;
+  if (w > 0 && h > 0) {
+    const geom = Math.sqrt(w * h);
+    return geom >= 11;
+  }
+  if (typeof window !== "undefined" && window.matchMedia?.("(pointer: coarse)").matches) {
+    return false;
+  }
+  return true;
+}
+
 function pointSegmentDistance(
   px: number,
   py: number,
@@ -295,7 +315,7 @@ export const InkOverlay = forwardRef<InkOverlayHandle, Props>(function InkOverla
   }
 
   const onPointerDown = (e: React.PointerEvent<HTMLCanvasElement>) => {
-    if (e.pointerType === "touch") {
+    if (e.pointerType === "touch" && isLikelyFingerTouch(e)) {
       if (!touchPanBridge?.current) return;
       e.preventDefault();
       touchCoordsRef.current.set(e.pointerId, { x: e.clientX, y: e.clientY });
@@ -329,7 +349,7 @@ export const InkOverlay = forwardRef<InkOverlayHandle, Props>(function InkOverla
       return;
     }
 
-    /** 손가락(touch)만 패닝. 그 외 타입은 필기(일부 기기에서 스타일러스가 pen이 아닐 수 있음). */
+    /** 손가락(coarse touch)만 패닝. `touch`로 보이는 스타일러스는 아래 필기 경로로 처리 */
     e.preventDefault();
     e.currentTarget.setPointerCapture(e.pointerId);
     activeDrawPointerId.current = e.pointerId;
@@ -358,19 +378,24 @@ export const InkOverlay = forwardRef<InkOverlayHandle, Props>(function InkOverla
 
   const onPointerMove = (e: React.PointerEvent<HTMLCanvasElement>) => {
     if (e.pointerType === "touch") {
-      if (touchCoordsRef.current.has(e.pointerId)) {
-        touchCoordsRef.current.set(e.pointerId, { x: e.clientX, y: e.clientY });
-      }
-      if (pinchTouchActive.current && touchCoordsRef.current.size >= 2) {
-        const pts = [...touchCoordsRef.current.values()];
-        const d1 = Math.hypot(pts[0].x - pts[1].x, pts[0].y - pts[1].y);
-        touchPanBridge?.current?.updatePinch?.(d1);
+      const fingerSession =
+        touchCoordsRef.current.has(e.pointerId) ||
+        activeTouchPanId.current === e.pointerId;
+      if (fingerSession) {
+        if (touchCoordsRef.current.has(e.pointerId)) {
+          touchCoordsRef.current.set(e.pointerId, { x: e.clientX, y: e.clientY });
+        }
+        if (pinchTouchActive.current && touchCoordsRef.current.size >= 2) {
+          const pts = [...touchCoordsRef.current.values()];
+          const d1 = Math.hypot(pts[0].x - pts[1].x, pts[0].y - pts[1].y);
+          touchPanBridge?.current?.updatePinch?.(d1);
+          return;
+        }
+        if (activeTouchPanId.current === e.pointerId && touchCoordsRef.current.size === 1) {
+          touchPanBridge?.current?.moveTouchPan(e.clientX, e.clientY);
+        }
         return;
       }
-      if (activeTouchPanId.current === e.pointerId && touchCoordsRef.current.size === 1) {
-        touchPanBridge?.current?.moveTouchPan(e.clientX, e.clientY);
-      }
-      return;
     }
 
     if (tool === "erase") {
@@ -412,23 +437,28 @@ export const InkOverlay = forwardRef<InkOverlayHandle, Props>(function InkOverla
 
   const endStroke = (e: React.PointerEvent<HTMLCanvasElement>) => {
     if (e.pointerType === "touch") {
-      touchCoordsRef.current.delete(e.pointerId);
-      if (touchCoordsRef.current.size < 2) {
-        if (pinchTouchActive.current) {
-          pinchTouchActive.current = false;
-          touchPanBridge?.current?.endPinch?.();
+      const fingerSession =
+        touchCoordsRef.current.has(e.pointerId) ||
+        activeTouchPanId.current === e.pointerId;
+      if (fingerSession) {
+        touchCoordsRef.current.delete(e.pointerId);
+        if (touchCoordsRef.current.size < 2) {
+          if (pinchTouchActive.current) {
+            pinchTouchActive.current = false;
+            touchPanBridge?.current?.endPinch?.();
+          }
         }
-      }
-      if (activeTouchPanId.current === e.pointerId) {
-        activeTouchPanId.current = null;
-        touchPanBridge?.current?.endTouchPan();
-        try {
-          e.currentTarget.releasePointerCapture(e.pointerId);
-        } catch {
-          // ignore
+        if (activeTouchPanId.current === e.pointerId) {
+          activeTouchPanId.current = null;
+          touchPanBridge?.current?.endTouchPan();
+          try {
+            e.currentTarget.releasePointerCapture(e.pointerId);
+          } catch {
+            // ignore
+          }
         }
+        return;
       }
-      return;
     }
 
     if (activeDrawPointerId.current !== e.pointerId) return;

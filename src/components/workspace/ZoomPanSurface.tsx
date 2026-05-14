@@ -283,7 +283,7 @@ export function ZoomPanSurface({
         aria-label={t("zoom.regionAria")}
         className={[
           "flex h-full w-full min-h-0",
-          stretchContent ? "items-stretch justify-center" : "items-center justify-center",
+          stretchContent ? "items-stretch justify-center" : "items-start justify-center",
         ].join(" ")}
         onPointerDown={navigationMode ? onPointerDown : undefined}
         onPointerMove={navigationMode ? onPointerMove : undefined}
@@ -295,7 +295,7 @@ export function ZoomPanSurface({
             "will-change-transform max-h-full max-w-full min-h-0",
             stretchContent
               ? "flex h-full w-full justify-center"
-              : "flex h-full w-max min-h-0 flex-col items-stretch",
+              : "flex w-max min-h-0 max-h-full flex-col items-stretch",
           ].join(" ")}
           style={{
             transform: `translate(${pan.x}px, ${pan.y}px) scale(${scale})`,

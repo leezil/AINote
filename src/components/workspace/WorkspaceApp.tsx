@@ -783,7 +783,7 @@ export function WorkspaceApp() {
                   className={[
                     "relative mx-auto max-w-full",
                     viewerFullscreen
-                      ? "flex h-full min-h-0 w-max max-w-full flex-col"
+                      ? "flex min-h-0 w-max max-w-full max-h-full flex-col"
                       : "min-h-[480px] w-max",
                   ].join(" ")}
                 >
@@ -791,7 +791,7 @@ export function WorkspaceApp() {
                     <div
                       className={
                         viewerFullscreen && inkLayerActive
-                          ? "flex min-h-0 flex-1 justify-center overflow-auto"
+                          ? "flex max-h-full min-h-0 justify-center overflow-auto"
                           : ""
                       }
                     >
@@ -819,7 +819,9 @@ export function WorkspaceApp() {
                     <div
                       className={[
                         "flex justify-center p-2",
-                        viewerFullscreen && inkLayerActive ? "min-h-0 flex-1 overflow-auto" : "",
+                        viewerFullscreen && inkLayerActive
+                          ? "max-h-full min-h-0 overflow-auto"
+                          : "",
                       ].join(" ")}
                     >
                       {/* eslint-disable-next-line @next/next/no-img-element */}

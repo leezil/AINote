@@ -104,7 +104,7 @@ export function PdfClientView({
         style={{
           width: displayW,
           maxWidth: "100%",
-          minHeight: wideMode ? "42vh" : 360,
+          minHeight: wideMode ? 0 : 360,
         }}
       >
         <div
