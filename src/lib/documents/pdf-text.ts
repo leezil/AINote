@@ -11,13 +11,15 @@
  */
 
 import { createRequire } from "node:module";
+import { pathToFileURL } from "node:url";
 
 const PDFJS_DIST_VERSION = "5.4.296";
 const PDFJS_ASSETS_BASE = `https://unpkg.com/pdfjs-dist@${PDFJS_DIST_VERSION}/`;
 
 const require = createRequire(import.meta.url);
 
-let pdfJsModulePromise: Promise<typeof import("pdfjs-dist/legacy/build/pdf.mjs")> | null = null;
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+let pdfJsModulePromise: Promise<any> | null = null;
 
 function ensurePdfJsNodeGlobals(): void {
   if (typeof globalThis.DOMMatrix !== "undefined") return;
@@ -41,7 +43,15 @@ async function loadPdfJs() {
   if (!pdfJsModulePromise) {
     pdfJsModulePromise = (async () => {
       ensurePdfJsNodeGlobals();
-      return import("pdfjs-dist/legacy/build/pdf.mjs");
+      const pdfjs = await import("pdfjs-dist/legacy/build/pdf.mjs");
+      /** Fake worker는 `GlobalWorkerOptions.workerSrc`를 동적 import합니다. 상대 경로 `./pdf.worker.mjs`는 서버리스 번들에서 깨지므로 실제 파일 URL로 고정합니다. */
+      try {
+        const workerAbs = require.resolve("pdfjs-dist/legacy/build/pdf.worker.mjs");
+        pdfjs.GlobalWorkerOptions.workerSrc = pathToFileURL(workerAbs).href;
+      } catch (e) {
+        console.error("[ainote] pdf.worker.mjs resolve 실패:", e);
+      }
+      return pdfjs;
     })();
   }
   return pdfJsModulePromise;
