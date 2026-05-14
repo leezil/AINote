@@ -1,8 +1,24 @@
 /** 워크스페이스 업로드 파일 합산 상한 (바이트), 1 GiB */
 export const WORKSPACE_STORAGE_CAP_BYTES = 1024 ** 3;
 
-/** AI 질문이 서버에서 성공한 횟수가 이 값에 도달하면 저장된 문서를 모두 삭제합니다. */
-export const AI_SUCCESS_ASK_PURGE_EVERY = 10;
+const AI_PURGE_AFTER_ASKS_DEFAULT = 500;
+const AI_PURGE_AFTER_ASKS_MAX = 250_000;
+
+/**
+ * 성공한 AI 질문이 이 횟수마다 업로드 문서를 전부 삭제합니다.
+ * Google AI Studio의 **일일 요청(RPD)** 한도와는 별개입니다.
+ *
+ * - `AINOTE_AI_PURGE_AFTER_SUCCESSFUL_ASKS` 환경 변수로 덮어씀 (기본 500).
+ * - `0` / `never` / `off` 이면 **질문 횟수 기준 삭제는 하지 않음** (저장·1GB 정책은 그대로).
+ */
+export function getAiSuccessAskPurgeEvery(): number | null {
+  const raw = process.env.AINOTE_AI_PURGE_AFTER_SUCCESSFUL_ASKS?.trim().toLowerCase();
+  if (raw === undefined || raw === "") return AI_PURGE_AFTER_ASKS_DEFAULT;
+  if (raw === "0" || raw === "never" || raw === "off" || raw === "false") return null;
+  const n = Number.parseInt(raw, 10);
+  if (!Number.isFinite(n) || n < 1) return AI_PURGE_AFTER_ASKS_DEFAULT;
+  return Math.min(Math.floor(n), AI_PURGE_AFTER_ASKS_MAX);
+}
 
 export function totalBytesOfDocuments(docs: Array<{ bytes: number }>): number {
   return docs.reduce((s, d) => s + (typeof d.bytes === "number" ? d.bytes : 0), 0);

@@ -3,7 +3,7 @@ import path from "node:path";
 import { del, get, list, put } from "@vercel/blob";
 import { getDataStoreRoot } from "@/lib/storage/data-root";
 import {
-  AI_SUCCESS_ASK_PURGE_EVERY,
+  getAiSuccessAskPurgeEvery,
   readAiAskCountFromParsedJson,
   sortDocumentsOldestFirst,
   totalBytesOfDocuments,
@@ -29,7 +29,7 @@ type Manifest = {
   aiAskCount?: number;
 };
 
-export { WORKSPACE_STORAGE_CAP_BYTES, AI_SUCCESS_ASK_PURGE_EVERY };
+export { WORKSPACE_STORAGE_CAP_BYTES, getAiSuccessAskPurgeEvery };
 
 function sanitizeWorkspaceId(workspaceId: string): string {
   const safe = workspaceId.replace(/[^a-zA-Z0-9_-]/g, "");
@@ -160,13 +160,17 @@ export class DocumentStore {
 
   /**
    * AI 질문이 성공했을 때 호출합니다.
-   * 카운트가 `threshold` 이상이면 저장 문서를 모두 지우고 카운트를 0으로 리셋합니다.
+   * 누적 성공 횟수가 `cap` 이상이면 저장 문서를 모두 지우고 카운트를 0으로 리셋합니다.
+   * `getAiSuccessAskPurgeEvery()`가 null이면(환경 변수로 비활성) 아무 것도 하지 않습니다.
    */
-  async recordSuccessfulAiAsk(threshold: number = AI_SUCCESS_ASK_PURGE_EVERY): Promise<void> {
+  async recordSuccessfulAiAsk(threshold?: number | null): Promise<void> {
+    const cap = threshold ?? getAiSuccessAskPurgeEvery();
+    if (cap === null) return;
+
     await this.ensureReady();
     const manifest = await this.readManifest();
     const next = (manifest.aiAskCount ?? 0) + 1;
-    if (next >= threshold) {
+    if (next >= cap) {
       await this.purgeAllDocuments();
     } else {
       manifest.aiAskCount = next;
@@ -338,10 +342,13 @@ export class BlobDocumentStore {
     await this.writeManifest({ documents: [], aiAskCount: 0 });
   }
 
-  async recordSuccessfulAiAsk(threshold: number = AI_SUCCESS_ASK_PURGE_EVERY): Promise<void> {
+  async recordSuccessfulAiAsk(threshold?: number | null): Promise<void> {
+    const cap = threshold ?? getAiSuccessAskPurgeEvery();
+    if (cap === null) return;
+
     const manifest = await this.readManifest();
     const next = (manifest.aiAskCount ?? 0) + 1;
-    if (next >= threshold) {
+    if (next >= cap) {
       await this.purgeAllDocuments();
     } else {
       manifest.aiAskCount = next;

@@ -385,7 +385,12 @@ export function WorkspaceApp() {
               <p className="text-xs text-zinc-500">
                 「자동」: 질문에 &quot;전체 요약&quot;·&quot;모든 페이지&quot; 등이 있으면 문서 전체 텍스트,
                 &quot;현재 페이지&quot;·&quot;이 화면&quot; 등이 있으면 보고 있는 페이지만 전달합니다. (둘 다 없으면
-                현재 페이지)
+                현재 페이지) 교재처럼 <strong className="font-medium text-zinc-600 dark:text-zinc-400">스캔 PDF</strong>
+                는 텍스트 레이어가 없어 추출이 비는 경우가 많습니다. 그때는 아래{' '}
+                <strong className="font-medium text-zinc-600 dark:text-zinc-400">
+                  화면 캡처 포함
+                </strong>
+                모드를 쓰면 이미지로 문제를 보낼 수 있습니다.
               </p>
               <label className="flex cursor-pointer items-center gap-2">
                 <input
@@ -464,7 +469,7 @@ export function WorkspaceApp() {
             <p className="mt-2 text-sm text-red-600 dark:text-red-400">{error}</p>
           ) : null}
           {answer ? (
-            <div className="mt-3 rounded-lg bg-zinc-50 p-3 text-sm leading-relaxed text-zinc-800 dark:bg-zinc-900 dark:text-zinc-100">
+            <div className="mt-3 whitespace-pre-wrap break-words rounded-lg border border-zinc-100 bg-zinc-50 p-3 font-sans text-sm leading-relaxed text-zinc-800 dark:border-zinc-800 dark:bg-zinc-900 dark:text-zinc-100">
               {answer}
             </div>
           ) : null}

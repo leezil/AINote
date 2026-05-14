@@ -3,7 +3,7 @@ import { headers } from "next/headers";
 import { AskRequestSchema } from "@/lib/ai/ask-schema";
 import { askGeminiScoped } from "@/lib/ai/gemini-scoped-ask";
 import { extractPdfAllPagesText, extractPdfPageText } from "@/lib/documents/pdf-text";
-import { createDocumentStore, AI_SUCCESS_ASK_PURGE_EVERY } from "@/lib/storage/document-store";
+import { createDocumentStore } from "@/lib/storage/document-store";
 import { getWorkspaceContextFromRequestHeaders } from "@/lib/workspace/resolve-workspace";
 
 export const runtime = "nodejs";
@@ -23,7 +23,7 @@ async function jsonAnswerWithAskAccounting(
   store: ReturnType<typeof createDocumentStore>,
   answer: string,
 ) {
-  await store.recordSuccessfulAiAsk(AI_SUCCESS_ASK_PURGE_EVERY);
+  await store.recordSuccessfulAiAsk();
   return NextResponse.json({ answer });
 }
 
