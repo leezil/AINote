@@ -317,6 +317,7 @@ export const InkOverlay = forwardRef<InkOverlayHandle, Props>(function InkOverla
   const onPointerDown = (e: React.PointerEvent<HTMLCanvasElement>) => {
     if (e.pointerType === "touch" && isLikelyFingerTouch(e)) {
       if (!touchPanBridge?.current) return;
+      e.stopPropagation();
       e.preventDefault();
       touchCoordsRef.current.set(e.pointerId, { x: e.clientX, y: e.clientY });
 
@@ -349,7 +350,8 @@ export const InkOverlay = forwardRef<InkOverlayHandle, Props>(function InkOverla
       return;
     }
 
-    /** 손가락(coarse touch)만 패닝. `touch`로 보이는 스타일러스는 아래 필기 경로로 처리 */
+    /** 손가락(coarse touch)만 패닝. 그 외는 필기 — 부모 ZoomPan에 버블되면 setPointerCapture가 캔버스를 가로챔 */
+    e.stopPropagation();
     e.preventDefault();
     e.currentTarget.setPointerCapture(e.pointerId);
     activeDrawPointerId.current = e.pointerId;
@@ -377,6 +379,7 @@ export const InkOverlay = forwardRef<InkOverlayHandle, Props>(function InkOverla
   };
 
   const onPointerMove = (e: React.PointerEvent<HTMLCanvasElement>) => {
+    e.stopPropagation();
     if (e.pointerType === "touch") {
       const fingerSession =
         touchCoordsRef.current.has(e.pointerId) ||
@@ -436,6 +439,7 @@ export const InkOverlay = forwardRef<InkOverlayHandle, Props>(function InkOverla
   };
 
   const endStroke = (e: React.PointerEvent<HTMLCanvasElement>) => {
+    e.stopPropagation();
     if (e.pointerType === "touch") {
       const fingerSession =
         touchCoordsRef.current.has(e.pointerId) ||

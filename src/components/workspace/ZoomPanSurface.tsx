@@ -157,9 +157,14 @@ export function ZoomPanSurface({
     const el = viewportRef.current;
     if (!el) return;
     const onWheel = (e: WheelEvent) => {
+      const t = e.target;
+      if (!(t instanceof Node)) return;
+      const surface = el.querySelector("[data-zoom-document-surface]");
+      if (!surface?.contains(t)) return;
       if (!e.ctrlKey && !e.metaKey && Math.abs(e.deltaY) < 24) return;
       e.preventDefault();
-      const rect = el.getBoundingClientRect();
+      const rect =
+        surface instanceof Element ? surface.getBoundingClientRect() : el.getBoundingClientRect();
       const mx = e.clientX - rect.left - rect.width / 2;
       const my = e.clientY - rect.top - rect.height / 2;
       const delta = -e.deltaY;
@@ -180,10 +185,18 @@ export function ZoomPanSurface({
   const distance = (a: ReactPointerEvent, b: ReactPointerEvent) =>
     Math.hypot(a.clientX - b.clientX, a.clientY - b.clientY);
 
+  /** PDF/필기 캔버스 등 — 여기서 시작한 포인터는 InkOverlay가 캡처·처리. 부모에서 잡으면 캡처를 빼앗아 필기가 막힘 */
+  const eventTargetIsInsideDocumentSurface = (e: ReactPointerEvent<Element>) => {
+    const t = e.target;
+    if (!(t instanceof Element)) return false;
+    return Boolean(t.closest("[data-zoom-document-surface]"));
+  };
+
   const onPointerDown = (e: ReactPointerEvent<HTMLDivElement>) => {
     if (!navigationMode) return;
-    /** Apple Pencil 등은 필기 레이어에서 처리 — 여기서 잡으면 펜이 먹지 않거나 패닝과 충돌함 */
+    /** Apple Pencil 등은 필기 레이어에서 처리 */
     if (e.pointerType === "pen") return;
+    if (eventTargetIsInsideDocumentSurface(e)) return;
     pointers.current.set(e.pointerId, e);
     const list = [...pointers.current.values()];
     if (list.length === 2) {
@@ -203,6 +216,7 @@ export function ZoomPanSurface({
   const onPointerMove = (e: ReactPointerEvent<HTMLDivElement>) => {
     if (!navigationMode) return;
     if (e.pointerType === "pen") return;
+    if (eventTargetIsInsideDocumentSurface(e) && !pointers.current.has(e.pointerId)) return;
     if (!pointers.current.has(e.pointerId)) return;
     pointers.current.set(e.pointerId, e);
     const list = [...pointers.current.values()];
@@ -224,7 +238,9 @@ export function ZoomPanSurface({
   };
 
   const endPointer = (e: ReactPointerEvent<HTMLDivElement>) => {
+    if (!navigationMode) return;
     if (e.pointerType === "pen") return;
+    if (!pointers.current.has(e.pointerId)) return;
     pointers.current.delete(e.pointerId);
     if (pointers.current.size < 2) pinchSession.current = null;
     if (pointers.current.size === 0) panDrag.current = null;

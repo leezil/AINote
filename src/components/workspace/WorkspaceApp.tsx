@@ -780,6 +780,7 @@ export function WorkspaceApp() {
               >
                 <div
                   ref={captureRef}
+                  data-zoom-document-surface
                   className={[
                     "relative mx-auto max-w-full",
                     viewerFullscreen
