@@ -70,8 +70,9 @@ export async function POST(req: Request) {
       try {
         pageCount = await getPdfPageCount(buffer);
       } catch (err) {
-        console.error("[ainote] getPdfPageCount failed:", err);
-        return NextResponse.json({ error: "PDF를 읽을 수 없습니다." }, { status: 400 });
+        /** Vercel/네트워크 등으로 서버 파싱이 실패해도 업로드는 허용. 페이지 수는 클라이언트 뷰어에서 확정. */
+        console.error("[ainote] getPdfPageCount failed (using placeholder):", err);
+        pageCount = 1;
       }
     }
 

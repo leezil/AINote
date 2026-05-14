@@ -11,6 +11,11 @@ export const AskRequestSchema = z.object({
       page: z.number().int().min(1),
     }),
     z.object({
+      kind: z.literal("pdf_full_text"),
+      documentId: z.string().min(1),
+      pageCountHint: z.number().int().min(1).max(5000).optional(),
+    }),
+    z.object({
       kind: z.literal("pdf_page_text_plus_viewport"),
       documentId: z.string().min(1),
       page: z.number().int().min(1),

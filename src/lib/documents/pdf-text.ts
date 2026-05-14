@@ -61,3 +61,51 @@ export async function extractPdfPageText(
     await pdf.destroy();
   }
 }
+
+/**
+ * 모든 페이지 텍스트를 이어 붙입니다. AI "전체 문서" 질문용.
+ * `maxTotalChars`를 넘기면 잘라 `truncated`를 true로 둡니다.
+ */
+export async function extractPdfAllPagesText(
+  buffer: Buffer,
+  options: { maxTotalChars: number; pageCountHint?: number },
+): Promise<{ text: string; pageCount: number; truncated: boolean }> {
+  let pageCount = 0;
+  let firstText = "";
+  try {
+    const first = await extractPdfPageText(buffer, 1);
+    pageCount = first.pageCount;
+    firstText = first.text;
+  } catch {
+    pageCount = options.pageCountHint ?? 0;
+  }
+  if (pageCount < 1) {
+    pageCount = options.pageCountHint ?? 1;
+  }
+
+  const max = options.maxTotalChars;
+  let acc = `\n\n--- 페이지 1/${pageCount} ---\n${firstText || "(텍스트 없음)"}`;
+  if (acc.length >= max) {
+    return { text: acc.slice(0, max).trim(), pageCount, truncated: true };
+  }
+
+  let truncated = false;
+  for (let p = 2; p <= pageCount; p++) {
+    let text = "";
+    try {
+      const r = await extractPdfPageText(buffer, p);
+      text = r.text;
+    } catch {
+      text = "";
+    }
+    const block = `\n\n--- 페이지 ${p}/${pageCount} ---\n${text || "(텍스트 없음)"}`;
+    if (acc.length + block.length > max) {
+      acc += block.slice(0, max - acc.length);
+      truncated = true;
+      break;
+    }
+    acc += block;
+  }
+
+  return { text: acc.trim(), pageCount, truncated };
+}

@@ -5,6 +5,7 @@ import { startTransition, useCallback, useEffect, useMemo, useRef, useState } fr
 import { toJpeg } from "html-to-image";
 import type { StoredDocumentMeta } from "@/lib/storage/document-store";
 import type { AskRequest } from "@/lib/ai/ask-schema";
+import { inferPdfMaterialIntentFromQuestion } from "@/lib/ai/scope-intent";
 import { InkOverlay, type InkOverlayHandle } from "@/components/ink/InkOverlay";
 
 const PdfClientView = dynamic(
@@ -15,23 +16,25 @@ const PdfClientView = dynamic(
 const defaultWorkspaceId =
   process.env.NEXT_PUBLIC_DEFAULT_WORKSPACE_ID?.trim() || "local";
 
-type AskMode =
-  | "pdf_page_text"
-  | "pdf_page_text_plus_viewport"
-  | "viewport_only"
-  | "image_file"
-  | "text_file";
+type PdfAskMode =
+  | "auto_material"
+  | "force_current_page"
+  | "force_full_document"
+  | "current_page_plus_capture"
+  | "capture_only";
 
 export function WorkspaceApp() {
   const [documents, setDocuments] = useState<StoredDocumentMeta[]>([]);
   const [openTabs, setOpenTabs] = useState<string[]>([]);
   const [activeId, setActiveId] = useState<string | null>(null);
   const [pageByDoc, setPageByDoc] = useState<Record<string, number>>({});
+  /** react-pdf가 알려준 실제 페이지 수(문서 id별). 서버 pageCount가 1로만 올 때 보정. */
+  const [pdfNumPagesByDoc, setPdfNumPagesByDoc] = useState<Record<string, number>>({});
   const captureRef = useRef<HTMLDivElement | null>(null);
   const inkRef = useRef<InkOverlayHandle | null>(null);
 
   const [question, setQuestion] = useState("");
-  const [askMode, setAskMode] = useState<AskMode>("pdf_page_text");
+  const [pdfAskMode, setPdfAskMode] = useState<PdfAskMode>("auto_material");
   const [answer, setAnswer] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -59,6 +62,11 @@ export function WorkspaceApp() {
     [documents, activeId],
   );
 
+  const pdfPageTotal =
+    activeMeta?.kind === "pdf" && activeMeta.id
+      ? pdfNumPagesByDoc[activeMeta.id] ?? activeMeta.pageCount
+      : activeMeta?.pageCount ?? 1;
+
   const currentPage = activeId ? pageByDoc[activeId] ?? 1 : 1;
 
   const setPage = (p: number) => {
@@ -72,9 +80,9 @@ export function WorkspaceApp() {
       setOpenTabs((tabs) => (tabs.includes(id) ? tabs : [...tabs, id]));
       setActiveId(id);
       setPageByDoc((prev) => ({ ...prev, [id]: prev[id] ?? 1 }));
-      if (kind === "image") setAskMode("image_file");
-      else if (kind === "text") setAskMode("text_file");
-      else setAskMode("pdf_page_text");
+      if (kind === "image") setPdfAskMode("auto_material");
+      else if (kind === "text") setPdfAskMode("auto_material");
+      else setPdfAskMode("auto_material");
     },
     [documents],
   );
@@ -104,9 +112,9 @@ export function WorkspaceApp() {
     (id: string) => {
       setActiveId(id);
       const meta = documents.find((d) => d.id === id);
-      if (meta?.kind === "image") setAskMode("image_file");
-      else if (meta?.kind === "text") setAskMode("text_file");
-      else setAskMode("pdf_page_text");
+      if (meta?.kind === "image") setPdfAskMode("auto_material");
+      else if (meta?.kind === "text") setPdfAskMode("auto_material");
+      else setPdfAskMode("auto_material");
     },
     [documents],
   );
@@ -139,16 +147,17 @@ export function WorkspaceApp() {
       let body: AskRequest;
 
       if (activeMeta.kind === "pdf") {
-        if (askMode === "pdf_page_text") {
+        if (pdfAskMode === "capture_only") {
+          const dataUrl = await captureViewportJpeg();
           body = {
             question: q,
             scope: {
-              kind: "pdf_page_text",
-              documentId: activeMeta.id,
-              page: currentPage,
+              kind: "viewport_only",
+              viewportImageBase64: dataUrl,
+              viewportMimeType: "image/jpeg",
             },
           };
-        } else if (askMode === "pdf_page_text_plus_viewport") {
+        } else if (pdfAskMode === "current_page_plus_capture") {
           const dataUrl = await captureViewportJpeg();
           body = {
             question: q,
@@ -160,19 +169,31 @@ export function WorkspaceApp() {
               viewportMimeType: "image/jpeg",
             },
           };
-        } else if (askMode === "viewport_only") {
-          const dataUrl = await captureViewportJpeg();
-          body = {
-            question: q,
-            scope: {
-              kind: "viewport_only",
-              viewportImageBase64: dataUrl,
-              viewportMimeType: "image/jpeg",
-            },
-          };
         } else {
-          setError("PDF에 맞는 질문 범위를 선택하세요.");
-          return;
+          const useFull =
+            pdfAskMode === "force_full_document" ||
+            (pdfAskMode === "auto_material" &&
+              inferPdfMaterialIntentFromQuestion(q) === "full_document");
+
+          if (useFull) {
+            body = {
+              question: q,
+              scope: {
+                kind: "pdf_full_text",
+                documentId: activeMeta.id,
+                pageCountHint: pdfPageTotal >= 1 ? pdfPageTotal : undefined,
+              },
+            };
+          } else {
+            body = {
+              question: q,
+              scope: {
+                kind: "pdf_page_text",
+                documentId: activeMeta.id,
+                page: currentPage,
+              },
+            };
+          }
         }
       } else if (activeMeta.kind === "image") {
         body = {
@@ -284,13 +305,13 @@ export function WorkspaceApp() {
                   이전
                 </button>
                 <span className="text-sm text-zinc-600 dark:text-zinc-300">
-                  {currentPage} / {activeMeta.pageCount}
+                  {currentPage} / {pdfPageTotal}
                 </span>
                 <button
                   type="button"
                   className="rounded-md border border-zinc-200 px-2 py-1 text-sm dark:border-zinc-700"
                   onClick={() =>
-                    setPage(Math.min(activeMeta.pageCount, currentPage + 1))
+                    setPage(Math.min(pdfPageTotal, currentPage + 1))
                   }
                 >
                   다음
@@ -319,9 +340,21 @@ export function WorkspaceApp() {
               <div ref={captureRef} className="relative min-h-[480px] w-full">
                 {activeMeta.kind === "pdf" ? (
                   <PdfClientView
+                    key={activeMeta.id}
                     fileUrl={fileUrl}
                     pageNumber={currentPage}
                     maxWidthPx={920}
+                    onPdfLoaded={(n) => {
+                      setPdfNumPagesByDoc((prev) => ({
+                        ...prev,
+                        [activeMeta.id]: n,
+                      }));
+                      setPageByDoc((prev) => {
+                        const cur = prev[activeMeta.id] ?? 1;
+                        if (cur <= n) return prev;
+                        return { ...prev, [activeMeta.id]: n };
+                      });
+                    }}
                   />
                 ) : activeMeta.kind === "image" ? (
                   <div className="flex justify-center p-2">
@@ -349,37 +382,60 @@ export function WorkspaceApp() {
           <p className="text-sm font-medium text-zinc-800 dark:text-zinc-100">AI 질문 (버튼을 누를 때만 호출)</p>
           {activeMeta?.kind === "pdf" ? (
             <fieldset className="mt-2 space-y-1 text-sm text-zinc-700 dark:text-zinc-300">
+              <p className="text-xs text-zinc-500">
+                「자동」: 질문에 &quot;전체 요약&quot;·&quot;모든 페이지&quot; 등이 있으면 문서 전체 텍스트,
+                &quot;현재 페이지&quot;·&quot;이 화면&quot; 등이 있으면 보고 있는 페이지만 전달합니다. (둘 다 없으면
+                현재 페이지)
+              </p>
               <label className="flex cursor-pointer items-center gap-2">
                 <input
                   type="radio"
                   name="scope"
-                  checked={askMode === "pdf_page_text"}
-                  onChange={() => setAskMode("pdf_page_text")}
+                  checked={pdfAskMode === "auto_material"}
+                  onChange={() => setPdfAskMode("auto_material")}
                 />
-                현재 페이지 텍스트만 (토큰 절약)
+                자동 (질문 문구로 현재 페이지 vs 전체 판별)
               </label>
               <label className="flex cursor-pointer items-center gap-2">
                 <input
                   type="radio"
                   name="scope"
-                  checked={askMode === "pdf_page_text_plus_viewport"}
-                  onChange={() => setAskMode("pdf_page_text_plus_viewport")}
+                  checked={pdfAskMode === "force_current_page"}
+                  onChange={() => setPdfAskMode("force_current_page")}
                 />
-                현재 페이지 텍스트 + 화면 캡처(필기·도표 포함)
+                강제: 지금 보는 페이지 텍스트만
               </label>
               <label className="flex cursor-pointer items-center gap-2">
                 <input
                   type="radio"
                   name="scope"
-                  checked={askMode === "viewport_only"}
-                  onChange={() => setAskMode("viewport_only")}
+                  checked={pdfAskMode === "force_full_document"}
+                  onChange={() => setPdfAskMode("force_full_document")}
                 />
-                화면 캡처만 (이미지 기반)
+                강제: PDF 전체 텍스트 (길면 서버에서 잘림)
+              </label>
+              <label className="flex cursor-pointer items-center gap-2">
+                <input
+                  type="radio"
+                  name="scope"
+                  checked={pdfAskMode === "current_page_plus_capture"}
+                  onChange={() => setPdfAskMode("current_page_plus_capture")}
+                />
+                현재 페이지 텍스트 + 화면 캡처 (필기·도표)
+              </label>
+              <label className="flex cursor-pointer items-center gap-2">
+                <input
+                  type="radio"
+                  name="scope"
+                  checked={pdfAskMode === "capture_only"}
+                  onChange={() => setPdfAskMode("capture_only")}
+                />
+                화면 캡처만 (이미지로 질문)
               </label>
             </fieldset>
           ) : activeMeta?.kind === "image" ? (
             <p className="mt-2 text-sm text-zinc-600 dark:text-zinc-400">
-              범위: 업로드한 이미지 파일 전체 (서버에서만 읽어 전달, 클라이언트 재업로드 없음)
+              범위: 업로드한 이미지 파일 전체를 서버가 Gemini에 전달합니다. (표·손글씨·사진 인식 가능)
             </p>
           ) : activeMeta?.kind === "text" ? (
             <p className="mt-2 text-sm text-zinc-600 dark:text-zinc-400">
@@ -390,7 +446,7 @@ export function WorkspaceApp() {
           <textarea
             className="mt-3 w-full rounded-lg border border-zinc-200 bg-white p-2 text-sm dark:border-zinc-700 dark:bg-zinc-950"
             rows={3}
-            placeholder="예: 현재 페이지에 나온 정의를 한 문장으로 정리해줘"
+            placeholder='예: "현재 페이지" 정의만 정리해줘 / "전체 요약" 해줘'
             value={question}
             onChange={(e) => setQuestion(e.target.value)}
           />

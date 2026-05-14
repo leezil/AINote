@@ -12,9 +12,11 @@ type Props = {
   pageNumber: number;
   /** Wider PDFs scale down to this width (px) to reduce client paint cost. */
   maxWidthPx: number;
+  /** Called when PDF loads in the browser (authoritative page count on server parse failure). */
+  onPdfLoaded?: (numPages: number) => void;
 };
 
-export function PdfClientView({ fileUrl, pageNumber, maxWidthPx }: Props) {
+export function PdfClientView({ fileUrl, pageNumber, maxWidthPx, onPdfLoaded }: Props) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const [containerWidth, setContainerWidth] = useState(maxWidthPx);
 
@@ -38,6 +40,9 @@ export function PdfClientView({ fileUrl, pageNumber, maxWidthPx }: Props) {
     <div ref={containerRef} className="flex justify-center bg-zinc-100/80 dark:bg-zinc-900/60">
       <Document
         file={file}
+        onLoadSuccess={(pdf) => {
+          onPdfLoaded?.(pdf.numPages);
+        }}
         loading={<p className="p-4 text-sm text-zinc-500">PDF 불러오는 중…</p>}
         error={<p className="p-4 text-sm text-red-600">PDF를 표시할 수 없습니다.</p>}
       >
