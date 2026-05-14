@@ -59,6 +59,8 @@ export function WorkspaceApp() {
   /** 손가락(touch)으로도 필기 — 기본은 펜·마우스만 */
   const [allowFingerInk, setAllowFingerInk] = useState(false);
   const aiResizeRef = useRef<{ startX: number; startW: number } | null>(null);
+  /** 이동·확대 모드에서 CSS scale — PDF 캔버스 DPR 보정에 사용 */
+  const [viewerZoomScale, setViewerZoomScale] = useState(1);
 
   const workspaceHeaders = useMemo(
     () => ({ "x-workspace-id": defaultWorkspaceId }),
@@ -521,6 +523,12 @@ export function WorkspaceApp() {
               <ZoomPanSurface
                 navigationMode={!gestureInk}
                 className={viewerFullscreen ? "h-full min-h-0" : "min-h-[320px]"}
+                onScaleChange={setViewerZoomScale}
+                viewResetKey={
+                  activeMeta
+                    ? `${activeMeta.id}-${currentPage}-${viewerFullscreen ? 1 : 0}`
+                    : "none"
+                }
               >
                 <div ref={captureRef} className="relative mx-auto min-h-[480px] w-max max-w-full">
                   {activeMeta.kind === "pdf" ? (
@@ -528,8 +536,9 @@ export function WorkspaceApp() {
                       key={activeMeta.id}
                       fileUrl={fileUrl}
                       pageNumber={currentPage}
-                      maxWidthPx={920}
+                      maxWidthPx={viewerFullscreen ? 8192 : 1280}
                       wideMode={viewerFullscreen}
+                      viewportScale={viewerZoomScale}
                       onPdfLoaded={(n) => {
                         setPdfNumPagesByDoc((prev) => ({
                           ...prev,

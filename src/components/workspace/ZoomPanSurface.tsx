@@ -3,6 +3,7 @@
 import {
   useCallback,
   useEffect,
+  useLayoutEffect,
   useRef,
   useState,
   type PointerEvent as ReactPointerEvent,
@@ -14,11 +15,18 @@ type Props = {
   /** true일 때 포인터로 이동·핀치 확대(필기 캔버스는 `pointer-events-none`으로 비활성화). */
   navigationMode: boolean;
   className?: string;
+  /** 뷰포트 배율(예: PDF 캔버스 DPR 보정용). */
+  onScaleChange?: (scale: number) => void;
+  /**
+   * 값이 바뀔 때 확대·이동을 초기화. 페이지/전체화면 전환 후 이전 pan 때문에 화면 밖으로 밀린 것처럼
+   * 보이는 문제를 막기 위해 사용.
+   */
+  viewResetKey?: string | number;
 };
 
-const MIN_SCALE = 0.45;
-const MAX_SCALE = 3.5;
-const WHEEL_SCALE_STEP = 0.09;
+const MIN_SCALE = 0.22;
+const MAX_SCALE = 10;
+const WHEEL_SCALE_STEP = 0.12;
 
 type PinchSession = {
   d0: number;
@@ -29,7 +37,13 @@ type PinchSession = {
  * PDF/이미지 영역에 CSS transform 기반 확대·축소·이동.
  * iPad: 한 손가락 드래그 = 이동, 두 손가락 = 핀치 줌(navigationMode일 때만).
  */
-export function ZoomPanSurface({ children, navigationMode, className }: Props) {
+export function ZoomPanSurface({
+  children,
+  navigationMode,
+  className,
+  onScaleChange,
+  viewResetKey,
+}: Props) {
   const [scale, setScale] = useState(1);
   const [pan, setPan] = useState({ x: 0, y: 0 });
   const viewportRef = useRef<HTMLDivElement | null>(null);
@@ -53,6 +67,20 @@ export function ZoomPanSurface({ children, navigationMode, className }: Props) {
       pinchSession.current = null;
     }
   }, [navigationMode]);
+
+  useEffect(() => {
+    onScaleChange?.(scale);
+  }, [scale, onScaleChange]);
+
+  useLayoutEffect(() => {
+    if (viewResetKey === undefined) return;
+    setScale(1);
+    setPan({ x: 0, y: 0 });
+    pinchSession.current = null;
+    panDrag.current = null;
+    pointers.current.clear();
+    onScaleChange?.(1);
+  }, [viewResetKey, onScaleChange]);
 
   useEffect(() => {
     const el = viewportRef.current;
@@ -145,14 +173,14 @@ export function ZoomPanSurface({ children, navigationMode, className }: Props) {
         <button
           type="button"
           className="pointer-events-auto rounded-md border border-zinc-300 bg-white/95 px-2 py-1 text-sm shadow dark:border-zinc-600 dark:bg-zinc-900/95"
-          onClick={() => setScale((s) => clampScale(s * 1.15))}
+          onClick={() => setScale((s) => clampScale(s * 1.22))}
         >
           +
         </button>
         <button
           type="button"
           className="pointer-events-auto rounded-md border border-zinc-300 bg-white/95 px-2 py-1 text-sm shadow dark:border-zinc-600 dark:bg-zinc-900/95"
-          onClick={() => setScale((s) => clampScale(s / 1.15))}
+          onClick={() => setScale((s) => clampScale(s / 1.22))}
         >
           −
         </button>

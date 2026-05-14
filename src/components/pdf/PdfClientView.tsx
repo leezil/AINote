@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Document, Page, pdfjs } from "react-pdf";
 import "react-pdf/dist/Page/AnnotationLayer.css";
 import "react-pdf/dist/Page/TextLayer.css";
@@ -14,6 +14,11 @@ type Props = {
   maxWidthPx?: number;
   /** 전체화면 등: 부모 너비에 맞추되 상한을 크게(최대 8192px). */
   wideMode?: boolean;
+  /**
+   * ZoomPanSurface CSS scale과 동기화. 1보다 크면 같은 CSS 너비 안에 더 촘촘한 캔버스를 그려
+   * 확대 시 글자가 덜 깨지게 함(react-pdf `devicePixelRatio` 보정).
+   */
+  viewportScale?: number;
   /** Called when PDF loads in the browser (authoritative page count on server parse failure). */
   onPdfLoaded?: (numPages: number) => void;
 };
@@ -21,27 +26,66 @@ type Props = {
 export function PdfClientView({
   fileUrl,
   pageNumber,
-  maxWidthPx = 920,
+  maxWidthPx = 1200,
   wideMode = false,
+  viewportScale = 1,
   onPdfLoaded,
 }: Props) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const cap = wideMode ? 8192 : maxWidthPx;
-  const [containerWidth, setContainerWidth] = useState(() =>
-    wideMode ? Math.min(cap, 1400) : Math.min(maxWidthPx, 920),
-  );
+  const [containerWidth, setContainerWidth] = useState(() => {
+    if (typeof window === "undefined") {
+      return wideMode ? Math.min(cap, 1600) : Math.min(maxWidthPx, 1100);
+    }
+    return wideMode
+      ? Math.min(cap, Math.floor(window.innerWidth * 0.92))
+      : Math.min(maxWidthPx, Math.floor(Math.min(window.innerWidth - 48, maxWidthPx)));
+  });
+
+  const applyMeasuredWidth = useCallback(() => {
+    const el = containerRef.current;
+    if (!el) return;
+    let w = Math.floor(el.getBoundingClientRect().width);
+    if (w < 64 && typeof window !== "undefined") {
+      w = wideMode
+        ? Math.floor(Math.min(cap, window.innerWidth * 0.9))
+        : Math.min(maxWidthPx, Math.max(320, Math.floor(window.innerWidth - 48)));
+    }
+    setContainerWidth(Math.max(280, Math.min(cap, w)));
+  }, [cap, maxWidthPx, wideMode]);
 
   useEffect(() => {
     const el = containerRef.current;
     if (!el) return;
     const ro = new ResizeObserver(() => {
-      const w = el.getBoundingClientRect().width;
-      setContainerWidth(Math.max(240, Math.min(cap, Math.floor(w))));
+      applyMeasuredWidth();
     });
     ro.observe(el);
-    setContainerWidth(Math.max(240, Math.min(cap, Math.floor(el.getBoundingClientRect().width))));
+    applyMeasuredWidth();
     return () => ro.disconnect();
-  }, [cap, maxWidthPx, wideMode]);
+  }, [applyMeasuredWidth, cap, maxWidthPx, wideMode]);
+
+  /** 전체화면·페이지 전환 직후 레이아웃이 0폭이었다가 잡히는 경우 재측정 */
+  useEffect(() => {
+    let cancelled = false;
+    const tick = () => {
+      if (cancelled) return;
+      applyMeasuredWidth();
+    };
+    const id0 = requestAnimationFrame(() => {
+      tick();
+      requestAnimationFrame(tick);
+    });
+    return () => {
+      cancelled = true;
+      cancelAnimationFrame(id0);
+    };
+  }, [applyMeasuredWidth, pageNumber, wideMode, fileUrl]);
+
+  const baseDpr =
+    typeof window !== "undefined" ? Math.min(window.devicePixelRatio || 1, 2.5) : 1;
+  /** CSS scale로 키운 만큼 캔버스 내부 해상도를 맞춤(상한으로 메모리 제한). */
+  const pdfDevicePixelRatio = Math.min(8, baseDpr * Math.max(1, viewportScale));
 
   const file = useMemo(() => ({ url: fileUrl }), [fileUrl]);
 
@@ -56,8 +100,10 @@ export function PdfClientView({
         error={<p className="p-4 text-sm text-red-600">PDF를 표시할 수 없습니다.</p>}
       >
         <Page
+          key={pageNumber}
           pageNumber={pageNumber}
           width={containerWidth}
+          devicePixelRatio={pdfDevicePixelRatio}
           renderTextLayer={false}
           renderAnnotationLayer={false}
         />
