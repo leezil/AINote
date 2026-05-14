@@ -13,7 +13,7 @@ import { toJpeg } from "html-to-image";
 import type { StoredDocumentMeta } from "@/lib/storage/document-store";
 import type { AskRequest } from "@/lib/ai/ask-schema";
 import { inferPdfMaterialIntentFromQuestion } from "@/lib/ai/scope-intent";
-import { InkOverlay, type InkOverlayHandle } from "@/components/ink/InkOverlay";
+import { InkOverlay, type InkOverlayHandle, type ZoomPanTouchBridge } from "@/components/ink/InkOverlay";
 import { WorkspaceDocImage } from "@/components/workspace/WorkspaceDocImage";
 import { ZoomPanSurface } from "@/components/workspace/ZoomPanSurface";
 import { useI18n } from "@/lib/i18n/LocaleProvider";
@@ -42,8 +42,6 @@ type PdfAskMode =
   | "capture_only";
 
 type PenTool = "ink" | "erase";
-/** 문서 뷰: 이동·확대 vs 필기 — 포인터 경합 방지용 전환 */
-type DocViewMode = "nav" | "ink";
 type AiPanelSide = "left" | "right";
 type AiLandscapeStack = "bottom" | "top";
 
@@ -65,9 +63,10 @@ export function WorkspaceApp() {
   const [error, setError] = useState<string | null>(null);
   /** 문서 뷰어 전체화면 + md */
   const [viewerFullscreen, setViewerFullscreen] = useState(false);
-  /** ink / erase (필기 모드에서만 캔버스로 전달) */
+  /** true: 필기 / false: 이동·확대(손가락은 Ink→touchBridge로 패닝) */
+  const [gestureInk, setGestureInk] = useState(true);
   const [penTool, setPenTool] = useState<PenTool>("ink");
-  const [docViewMode, setDocViewMode] = useState<DocViewMode>("ink");
+  const [allowFingerInk, setAllowFingerInk] = useState(false);
   /** 세로 뷰포트(상하 스택): AI를 아래(기본) 또는 위 */
   const [aiLandscapeStack, setAiLandscapeStack] = useState<AiLandscapeStack>("bottom");
   /** 가로 뷰포트(좌우 분할): AI를 오른쪽(기본) 또는 왼쪽 */
@@ -83,9 +82,10 @@ export function WorkspaceApp() {
   const [inkColor, setInkColor] = useState("#2563eb");
   const [inkWidth, setInkWidth] = useState(2.8);
   const [eraserRadius, setEraserRadius] = useState(18);
+  const touchPanBridgeRef = useRef<ZoomPanTouchBridge | null>(null);
 
   const inkLayerActive = Boolean(activeId);
-  const inkPointerActive = inkLayerActive && docViewMode === "ink";
+  const inkPointerActive = inkLayerActive && gestureInk;
   const viewportPdfScale = viewerFullscreen ? zoomScaleFs : zoomScaleWin;
   const isMdFsViewport =
     viewerFullscreen && isMdUp && layoutViewport.w > 0;
@@ -271,12 +271,12 @@ export function WorkspaceApp() {
   }, [detachAiResizeListeners]);
 
   useEffect(() => {
-    if (docViewMode !== "ink") return;
+    if (!gestureInk) return;
     const id = requestAnimationFrame(() => {
       inkRef.current?.syncLayout();
     });
     return () => cancelAnimationFrame(id);
-  }, [docViewMode]);
+  }, [gestureInk]);
 
   const workspaceHeaders = useMemo(
     () => ({ "x-workspace-id": defaultWorkspaceId }),
@@ -663,11 +663,11 @@ export function WorkspaceApp() {
                 type="button"
                 className={[
                   "rounded-md border px-2 py-1 text-sm",
-                  docViewMode === "nav"
+                  !gestureInk
                     ? "border-zinc-900 bg-zinc-900 text-white dark:border-zinc-100 dark:bg-zinc-100 dark:text-zinc-900"
                     : "border-zinc-200 dark:border-zinc-700",
                 ].join(" ")}
-                onClick={() => setDocViewMode("nav")}
+                onClick={() => setGestureInk(false)}
               >
                 {t("workspace.modeNav")}
               </button>
@@ -675,11 +675,11 @@ export function WorkspaceApp() {
                 type="button"
                 className={[
                   "rounded-md border px-2 py-1 text-sm",
-                  docViewMode === "ink"
+                  gestureInk
                     ? "border-zinc-900 bg-zinc-900 text-white dark:border-zinc-100 dark:bg-zinc-100 dark:text-zinc-900"
                     : "border-zinc-200 dark:border-zinc-700",
                 ].join(" ")}
-                onClick={() => setDocViewMode("ink")}
+                onClick={() => setGestureInk(true)}
               >
                 {t("workspace.modeInk")}
               </button>
@@ -756,6 +756,17 @@ export function WorkspaceApp() {
               >
                 {t("workspace.clearAllInk")}
               </button>
+              {gestureInk ? (
+                <label className="flex cursor-pointer items-center gap-1.5 text-xs text-zinc-600 dark:text-zinc-400">
+                  <input
+                    type="checkbox"
+                    className="rounded border-zinc-300 dark:border-zinc-600"
+                    checked={allowFingerInk}
+                    onChange={(e) => setAllowFingerInk(e.target.checked)}
+                  />
+                  {t("workspace.fingerInk")}
+                </label>
+              ) : null}
               {viewerFullscreen ? (
                 fullscreenAiOpen ? (
                   <button
@@ -796,12 +807,17 @@ export function WorkspaceApp() {
             ) : (
               <ZoomPanSurface
                 key={viewerFullscreen ? "zoom-fs" : "zoom-win"}
-                navigationMode={docViewMode === "nav"}
+                navigationMode={!gestureInk}
                 className={viewerFullscreen ? "h-full min-h-0" : "min-h-[320px]"}
                 initialScale={viewerFullscreen ? zoomScaleFs : zoomScaleWin}
                 onScaleChange={handleViewerScaleChange}
-                stretchContent={false}
-                viewResetKey={activeMeta ? activeMeta.id : "none"}
+                touchBridgeRef={touchPanBridgeRef}
+                stretchContent={viewerFullscreen && inkLayerActive}
+                viewResetKey={
+                  activeMeta
+                    ? `${activeMeta.id}-${currentPage}-${viewerFullscreen ? 1 : 0}`
+                    : "none"
+                }
                 panResetKey={
                   activeMeta
                     ? activeMeta.kind === "pdf"
@@ -868,6 +884,8 @@ export function WorkspaceApp() {
                   <InkOverlay
                     ref={inkRef}
                     storageKey={inkStorageKey}
+                    allowFingerInk={allowFingerInk}
+                    touchPanBridge={touchPanBridgeRef}
                     tool={penTool === "erase" ? "erase" : "draw"}
                     strokeColor={inkColor}
                     strokeWidth={inkWidth}

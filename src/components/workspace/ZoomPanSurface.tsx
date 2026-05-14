@@ -7,22 +7,22 @@ import {
   useLayoutEffect,
   useRef,
   useState,
+  type MutableRefObject,
   type PointerEvent as ReactPointerEvent,
   type ReactNode,
 } from "react";
+import type { ZoomPanTouchBridge } from "@/components/ink/InkOverlay";
 
 type Props = {
   children: ReactNode;
-  /**
-   * true: 문서 위에 투명 레이어로 한 손 이동·두 손 핀치(필기는 부모에서 pointer-events 끔).
-   * false: 레이어 없음 — 필기만 받음(휠·±버튼으로 확대).
-   */
   navigationMode?: boolean;
   className?: string;
   onScaleChange?: (scale: number) => void;
   initialScale?: number;
   viewResetKey?: string | number;
   panResetKey?: string | number;
+  /** InkOverlay에서 손가락 패닝·핀치를 이 객체로 전달 */
+  touchBridgeRef?: MutableRefObject<ZoomPanTouchBridge | null> | null;
   stretchContent?: boolean;
 };
 
@@ -47,6 +47,7 @@ export function ZoomPanSurface({
   initialScale,
   viewResetKey,
   panResetKey,
+  touchBridgeRef,
   stretchContent = false,
 }: Props) {
   const { t } = useI18n();
@@ -56,6 +57,8 @@ export function ZoomPanSurface({
   scaleRef.current = scale;
   const panRef = useRef(pan);
   panRef.current = pan;
+  const touchDragRef = useRef<{ origX: number; origY: number; sx: number; sy: number } | null>(null);
+  const pinchTouchRef = useRef<{ d0: number; s0: number } | null>(null);
   const viewportRef = useRef<HTMLDivElement | null>(null);
   const pointers = useRef<Map<number, ReactPointerEvent<HTMLDivElement>>>(new Map());
   const pinchSession = useRef<PinchSession | null>(null);
@@ -69,6 +72,8 @@ export function ZoomPanSurface({
     pinchSession.current = null;
     panDrag.current = null;
     pointers.current.clear();
+    touchDragRef.current = null;
+    pinchTouchRef.current = null;
   }, []);
 
   useEffect(() => {
@@ -90,6 +95,8 @@ export function ZoomPanSurface({
     pinchSession.current = null;
     panDrag.current = null;
     pointers.current.clear();
+    touchDragRef.current = null;
+    pinchTouchRef.current = null;
     onScaleChange?.(1);
   }, [viewResetKey, onScaleChange]);
 
@@ -99,7 +106,45 @@ export function ZoomPanSurface({
     pinchSession.current = null;
     panDrag.current = null;
     pointers.current.clear();
+    touchDragRef.current = null;
+    pinchTouchRef.current = null;
   }, [panResetKey]);
+
+  useEffect(() => {
+    if (!touchBridgeRef) return;
+    const bridge: ZoomPanTouchBridge = {
+      beginTouchPan(clientX: number, clientY: number) {
+        const p = panRef.current;
+        touchDragRef.current = { origX: p.x, origY: p.y, sx: clientX, sy: clientY };
+      },
+      moveTouchPan(clientX: number, clientY: number) {
+        const d = touchDragRef.current;
+        if (!d) return;
+        setPan({
+          x: d.origX + (clientX - d.sx),
+          y: d.origY + (clientY - d.sy),
+        });
+      },
+      endTouchPan() {
+        touchDragRef.current = null;
+      },
+      beginPinch(d0: number) {
+        pinchTouchRef.current = { d0, s0: scaleRef.current };
+      },
+      updatePinch(d1: number) {
+        const p = pinchTouchRef.current;
+        if (!p || p.d0 < 8 || d1 < 8) return;
+        setScale(clampScale(p.s0 * (d1 / p.d0)));
+      },
+      endPinch() {
+        pinchTouchRef.current = null;
+      },
+    };
+    touchBridgeRef.current = bridge;
+    return () => {
+      touchBridgeRef.current = null;
+    };
+  }, [touchBridgeRef, clampScale]);
 
   useEffect(() => {
     const el = viewportRef.current;
