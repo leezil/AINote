@@ -865,7 +865,7 @@ export function WorkspaceApp() {
                   ref={captureRef}
                   data-zoom-document-surface
                   className={[
-                    "relative mx-auto max-w-full",
+                    "relative isolate mx-auto max-w-full",
                     viewerFullscreen
                       ? "flex min-h-0 w-max max-w-full max-h-full flex-col"
                       : "min-h-[480px] w-max",
@@ -879,25 +879,27 @@ export function WorkspaceApp() {
                           : "relative z-0"
                       }
                     >
-                      <PdfClientView
-                      key={activeMeta.id}
-                      fileUrl={fileUrl}
-                      pageNumber={currentPage}
-                      maxWidthPx={viewerFullscreen ? 8192 : 1280}
-                      wideMode={viewerFullscreen}
-                      viewportScale={viewportPdfScale}
-                      onPdfLoaded={(n) => {
-                        setPdfNumPagesByDoc((prev) => ({
-                          ...prev,
-                          [activeMeta.id]: n,
-                        }));
-                        setPageByDoc((prev) => {
-                          const cur = prev[activeMeta.id] ?? 1;
-                          if (cur <= n) return prev;
-                          return { ...prev, [activeMeta.id]: n };
-                        });
-                      }}
-                    />
+                      <div className={inkPointerActive ? "pointer-events-none" : undefined}>
+                        <PdfClientView
+                          key={activeMeta.id}
+                          fileUrl={fileUrl}
+                          pageNumber={currentPage}
+                          maxWidthPx={viewerFullscreen ? 8192 : 1280}
+                          wideMode={viewerFullscreen}
+                          viewportScale={viewportPdfScale}
+                          onPdfLoaded={(n) => {
+                            setPdfNumPagesByDoc((prev) => ({
+                              ...prev,
+                              [activeMeta.id]: n,
+                            }));
+                            setPageByDoc((prev) => {
+                              const cur = prev[activeMeta.id] ?? 1;
+                              if (cur <= n) return prev;
+                              return { ...prev, [activeMeta.id]: n };
+                            });
+                          }}
+                        />
+                      </div>
                     </div>
                   ) : activeMeta.kind === "image" ? (
                     <div
@@ -906,15 +908,19 @@ export function WorkspaceApp() {
                         viewerFullscreen && inkLayerActive ? "max-h-full min-h-0 overflow-auto" : "",
                       ].join(" ")}
                     >
-                      <WorkspaceDocImage
-                        fileUrl={fileUrl}
-                        fetchHeaders={workspaceHeaders}
-                        alt={activeMeta.filename}
-                        className="max-h-[85vh] w-auto max-w-none object-contain md:max-h-[90vh]"
-                      />
+                      <div className={inkPointerActive ? "pointer-events-none" : undefined}>
+                        <WorkspaceDocImage
+                          fileUrl={fileUrl}
+                          fetchHeaders={workspaceHeaders}
+                          alt={activeMeta.filename}
+                          className="max-h-[85vh] w-auto max-w-none object-contain md:max-h-[90vh]"
+                        />
+                      </div>
                     </div>
                   ) : (
-                    <TextPreview fileUrl={fileUrl} fetchHeaders={workspaceHeaders} />
+                    <div className={inkPointerActive ? "pointer-events-none" : undefined}>
+                      <TextPreview fileUrl={fileUrl} fetchHeaders={workspaceHeaders} />
+                    </div>
                   )}
                   <InkOverlay
                     ref={inkRef}
@@ -927,7 +933,7 @@ export function WorkspaceApp() {
                     eraserRadius={eraserRadius}
                     viewportScale={viewportPdfScale}
                     className={[
-                      "absolute inset-0 z-20",
+                      "absolute inset-0 z-[50]",
                       inkPointerActive ? "pointer-events-auto" : "pointer-events-none",
                     ].join(" ")}
                   />
