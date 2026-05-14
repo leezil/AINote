@@ -868,7 +868,6 @@ export function WorkspaceApp() {
                   <InkOverlay
                     ref={inkRef}
                     storageKey={inkStorageKey}
-                    interactionsEnabled={inkPointerActive}
                     tool={penTool === "erase" ? "erase" : "draw"}
                     strokeColor={inkColor}
                     strokeWidth={inkWidth}

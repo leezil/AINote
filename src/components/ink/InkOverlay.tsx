@@ -5,7 +5,6 @@ import {
   useCallback,
   useEffect,
   useImperativeHandle,
-  useLayoutEffect,
   useRef,
   useState,
 } from "react";
@@ -23,11 +22,6 @@ type Props = {
   tool: InkTool;
   /** ZoomPanSurface CSS scale과 맞춰 캔버스 내부 해상도를 올림(확대 시 선명도). */
   viewportScale?: number;
-  /**
-   * false일 때는 포인터 리스너를 붙이지 않음(이동·확대 모드).
-   * true로 바뀔 때마다 리스너를 다시 등록해 캔버스 입력이 살아나게 함.
-   */
-  interactionsEnabled?: boolean;
 };
 
 export type Stroke = {
@@ -82,6 +76,17 @@ function eraseStrokesAt(strokes: Stroke[], px: number, py: number, eraserR: numb
   return strokes.filter((s) => !strokeHitByEraser(s, px, py, eraserR));
 }
 
+function coalescedClientPoints(
+  e: React.PointerEvent<HTMLCanvasElement>,
+): ReadonlyArray<{ clientX: number; clientY: number }> {
+  const ne = e.nativeEvent;
+  if (ne instanceof PointerEvent && typeof ne.getCoalescedEvents === "function") {
+    const c = ne.getCoalescedEvents();
+    if (c.length > 0) return c;
+  }
+  return [e];
+}
+
 export const InkOverlay = forwardRef<InkOverlayHandle, Props>(function InkOverlay(
   {
     storageKey,
@@ -91,7 +96,6 @@ export const InkOverlay = forwardRef<InkOverlayHandle, Props>(function InkOverla
     eraserRadius = 16,
     tool,
     viewportScale = 1,
-    interactionsEnabled = true,
   },
   ref,
 ) {
@@ -101,8 +105,6 @@ export const InkOverlay = forwardRef<InkOverlayHandle, Props>(function InkOverla
   const activeDrawPointerId = useRef<number | null>(null);
   const eraserHoverRef = useRef<Point | null>(null);
   const [, bump] = useState(0);
-  /** syncLayout·리사이즈 직후 포인터 리스너를 다시 붙이기 위한 세대 번호 */
-  const [layoutGen, setLayoutGen] = useState(0);
   const lastAllocRef = useRef<{ cssW: number; cssH: number; dpr: number }>({
     cssW: 0,
     cssH: 0,
@@ -274,13 +276,6 @@ export const InkOverlay = forwardRef<InkOverlayHandle, Props>(function InkOverla
         lastAllocRef.current = { cssW: 0, cssH: 0, dpr: 0 };
         resizeToContainer();
         bump((n) => n + 1);
-        setLayoutGen((g) => g + 1);
-        requestAnimationFrame(() => {
-          lastAllocRef.current = { cssW: 0, cssH: 0, dpr: 0 };
-          resizeToContainer();
-          bump((n) => n + 1);
-          setLayoutGen((g) => g + 1);
-        });
       },
     }),
     [persist, redraw, resizeToContainer],
@@ -296,92 +291,56 @@ export const InkOverlay = forwardRef<InkOverlayHandle, Props>(function InkOverla
     return { x, y };
   }, []);
 
-  const handlersRef = useRef({ persist, redraw, clientPointFromClient });
-  handlersRef.current = { persist, redraw, clientPointFromClient };
-
-  const inkParamsRef = useRef({
-    tool: "draw" as InkTool,
-    strokeColor: "#2563eb",
-    strokeWidth: 2.4,
-    eraserRadius: 16,
-  });
-  inkParamsRef.current = { tool, strokeColor, strokeWidth, eraserRadius };
-
-  useLayoutEffect(() => {
-    const canvas = canvasRef.current;
-    if (!canvas || !interactionsEnabled) {
-      return;
-    }
-
-    const passiveFalse: AddEventListenerOptions = { passive: false };
-
-    function coalesced(ev: PointerEvent): ReadonlyArray<PointerEvent> {
-      if (typeof ev.getCoalescedEvents === "function") {
-        const c = ev.getCoalescedEvents();
-        if (c.length > 0) return c;
-      }
-      return [ev];
-    }
-
-    const onPointerDown = (e: PointerEvent) => {
+  const onPointerDown = useCallback(
+    (e: React.PointerEvent<HTMLCanvasElement>) => {
       e.preventDefault();
-      e.stopPropagation();
-      try {
-        canvas.setPointerCapture(e.pointerId);
-      } catch {
-        // ignore
-      }
+      e.currentTarget.setPointerCapture(e.pointerId);
       activeDrawPointerId.current = e.pointerId;
-      const params = inkParamsRef.current;
-      const { clientPointFromClient: toLocal, persist: persistFn, redraw: redrawFn } =
-        handlersRef.current;
 
-      if (params.tool === "erase") {
+      if (tool === "erase") {
         currentRef.current = null;
-        const p = toLocal(e.clientX, e.clientY);
+        const p = clientPointFromClient(e.clientX, e.clientY);
         eraserHoverRef.current = p;
-        const next = eraseStrokesAt(strokesRef.current, p.x, p.y, params.eraserRadius);
+        const next = eraseStrokesAt(strokesRef.current, p.x, p.y, eraserRadius);
         if (next.length !== strokesRef.current.length) {
           strokesRef.current = next;
-          persistFn();
+          persist();
           bump((n) => n + 1);
         }
-        redrawFn();
+        redraw();
         return;
       }
 
       eraserHoverRef.current = null;
       currentRef.current = {
-        color: params.strokeColor,
-        width: params.strokeWidth,
-        points: [toLocal(e.clientX, e.clientY)],
+        color: strokeColor,
+        width: strokeWidth,
+        points: [clientPointFromClient(e.clientX, e.clientY)],
       };
-    };
+    },
+    [tool, strokeColor, strokeWidth, eraserRadius, clientPointFromClient, persist, redraw],
+  );
 
-    const onPointerMove = (e: PointerEvent) => {
-      e.preventDefault();
-      const params = inkParamsRef.current;
-      const { clientPointFromClient: toLocal, persist: persistFn, redraw: redrawFn } =
-        handlersRef.current;
-
-      if (params.tool === "erase") {
-        eraserHoverRef.current = toLocal(e.clientX, e.clientY);
+  const onPointerMove = useCallback(
+    (e: React.PointerEvent<HTMLCanvasElement>) => {
+      if (tool === "erase") {
+        eraserHoverRef.current = clientPointFromClient(e.clientX, e.clientY);
         if (activeDrawPointerId.current === e.pointerId) {
-          const list = coalesced(e);
+          const list = coalescedClientPoints(e);
           let changed = false;
           for (const ev of list) {
-            const p = toLocal(ev.clientX, ev.clientY);
-            const next = eraseStrokesAt(strokesRef.current, p.x, p.y, params.eraserRadius);
+            const p = clientPointFromClient(ev.clientX, ev.clientY);
+            const next = eraseStrokesAt(strokesRef.current, p.x, p.y, eraserRadius);
             if (next.length !== strokesRef.current.length) {
               strokesRef.current = next;
               changed = true;
             }
           }
-          if (changed) persistFn();
-          redrawFn();
+          if (changed) persist();
+          redraw();
           if (changed) bump((n) => n + 1);
         } else {
-          redrawFn();
+          redraw();
         }
         return;
       }
@@ -389,73 +348,66 @@ export const InkOverlay = forwardRef<InkOverlayHandle, Props>(function InkOverla
       if (activeDrawPointerId.current !== e.pointerId) return;
       if (!currentRef.current) return;
 
-      const minDist = Math.max(0.04, Math.min(0.85, params.strokeWidth * 0.065));
-      const list = coalesced(e);
+      const minDist = Math.max(0.04, Math.min(0.85, strokeWidth * 0.065));
+      const list = coalescedClientPoints(e);
       const pts = currentRef.current.points;
       for (const ev of list) {
-        const p = toLocal(ev.clientX, ev.clientY);
+        const p = clientPointFromClient(ev.clientX, ev.clientY);
         const last = pts.length > 0 ? pts[pts.length - 1] : null;
         if (last && distance(last, p) < minDist) continue;
         pts.push(p);
       }
-      redrawFn();
-    };
+      redraw();
+    },
+    [tool, strokeWidth, eraserRadius, clientPointFromClient, persist, redraw],
+  );
 
-    const endStroke = (e: PointerEvent) => {
+  const endStroke = useCallback(
+    (e: React.PointerEvent<HTMLCanvasElement>) => {
       if (activeDrawPointerId.current !== e.pointerId) return;
       activeDrawPointerId.current = null;
-      const params = inkParamsRef.current;
-      const { persist: persistFn, redraw: redrawFn } = handlersRef.current;
 
-      if (params.tool === "erase") {
+      if (tool === "erase") {
         try {
-          canvas.releasePointerCapture(e.pointerId);
+          e.currentTarget.releasePointerCapture(e.pointerId);
         } catch {
           // ignore
         }
-        redrawFn();
+        redraw();
         return;
       }
 
       if (currentRef.current && currentRef.current.points.length >= 1) {
         strokesRef.current.push(currentRef.current);
-        persistFn();
+        persist();
       }
       currentRef.current = null;
-      redrawFn();
+      redraw();
       bump((n) => n + 1);
       try {
-        canvas.releasePointerCapture(e.pointerId);
+        e.currentTarget.releasePointerCapture(e.pointerId);
       } catch {
         // ignore
       }
-    };
+    },
+    [tool, persist, redraw],
+  );
 
-    const onPointerLeave = () => {
-      eraserHoverRef.current = null;
-      handlersRef.current.redraw();
-    };
-
-    canvas.addEventListener("pointerdown", onPointerDown, passiveFalse);
-    canvas.addEventListener("pointermove", onPointerMove, passiveFalse);
-    canvas.addEventListener("pointerup", endStroke, passiveFalse);
-    canvas.addEventListener("pointercancel", endStroke, passiveFalse);
-    canvas.addEventListener("pointerleave", onPointerLeave);
-
-    return () => {
-      canvas.removeEventListener("pointerdown", onPointerDown, passiveFalse);
-      canvas.removeEventListener("pointermove", onPointerMove, passiveFalse);
-      canvas.removeEventListener("pointerup", endStroke, passiveFalse);
-      canvas.removeEventListener("pointercancel", endStroke, passiveFalse);
-      canvas.removeEventListener("pointerleave", onPointerLeave);
-    };
-  }, [interactionsEnabled, storageKey, layoutGen]);
+  const onPointerLeave = useCallback(() => {
+    eraserHoverRef.current = null;
+    redraw();
+  }, [redraw]);
 
   return (
     <canvas
       ref={canvasRef}
       className={className}
       style={{ touchAction: "none" }}
+      onPointerDown={onPointerDown}
+      onPointerMove={onPointerMove}
+      onPointerLeave={onPointerLeave}
+      onPointerUp={endStroke}
+      onPointerCancel={endStroke}
     />
   );
 });
