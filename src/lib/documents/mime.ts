@@ -12,11 +12,24 @@ export function inferKindFromMime(mime: string): StoredDocumentKind | null {
 
 export function normalizeMime(filename: string, declared?: string | null): string {
   const ext = filename.split(".").pop()?.toLowerCase();
-  if (declared && declared.length > 0) return declared;
-  if (ext === "pdf") return "application/pdf";
-  if (ext === "txt") return "text/plain";
-  if (ext === "png") return "image/png";
-  if (ext === "jpg" || ext === "jpeg") return "image/jpeg";
-  if (ext === "webp") return "image/webp";
-  return "application/octet-stream";
+  const d = (declared ?? "").trim().toLowerCase();
+
+  /** Many mobile pickers send octet-stream even for pdf/png; prefer extension then. */
+  const isGeneric =
+    d === "" ||
+    d === "application/octet-stream" ||
+    d === "binary/octet-stream" ||
+    d === "application/x-msdownload";
+
+  if (isGeneric) {
+    if (ext === "pdf") return "application/pdf";
+    if (ext === "txt") return "text/plain";
+    if (ext === "png") return "image/png";
+    if (ext === "jpg" || ext === "jpeg") return "image/jpeg";
+    if (ext === "webp") return "image/webp";
+    if (ext === "gif") return "image/gif";
+    return "application/octet-stream";
+  }
+
+  return (declared ?? "").trim();
 }

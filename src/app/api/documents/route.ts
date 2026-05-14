@@ -44,8 +44,18 @@ export async function POST(req: Request) {
     }
 
     const filename = file.name || "upload";
-    const mime = normalizeMime(filename, file.type);
-    const kind = inferKindFromMime(mime);
+    const arrayBuffer = await file.arrayBuffer();
+    const buffer = Buffer.from(arrayBuffer);
+
+    let mime = normalizeMime(filename, file.type);
+    let kind = inferKindFromMime(mime);
+    if (!kind && buffer.length >= 5) {
+      const head = buffer.subarray(0, 5).toString("latin1");
+      if (head.startsWith("%PDF-")) {
+        mime = "application/pdf";
+        kind = "pdf";
+      }
+    }
     if (!kind) {
       return NextResponse.json(
         { error: "지원하지 않는 형식입니다. (pdf, 이미지, txt)" },
@@ -53,8 +63,6 @@ export async function POST(req: Request) {
       );
     }
 
-    const arrayBuffer = await file.arrayBuffer();
-    const buffer = Buffer.from(arrayBuffer);
     const id = randomUUID();
 
     let pageCount = 1;
