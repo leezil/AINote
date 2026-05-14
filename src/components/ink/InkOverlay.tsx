@@ -40,6 +40,8 @@ type Props = {
   strokeWidth?: number;
   eraserRadius?: number;
   tool: InkTool;
+  /** ZoomPanSurface CSS scale과 맞춰 캔버스 내부 해상도를 올림(확대 시 선명도). */
+  viewportScale?: number;
   /** 손가락(touch) 한 손 드래그를 뷰 이동으로 연결 (필기/지우개 모드에서 사용). */
   touchPanBridge?: MutableRefObject<ZoomPanTouchBridge | null> | null;
 };
@@ -92,6 +94,7 @@ export const InkOverlay = forwardRef<InkOverlayHandle, Props>(function InkOverla
     strokeWidth = 2.4,
     eraserRadius = 16,
     tool,
+    viewportScale = 1,
     touchPanBridge = null,
   },
   ref,
@@ -103,6 +106,7 @@ export const InkOverlay = forwardRef<InkOverlayHandle, Props>(function InkOverla
   const activeTouchPanId = useRef<number | null>(null);
   const touchCoordsRef = useRef<Map<number, { x: number; y: number }>>(new Map());
   const pinchTouchActive = useRef(false);
+  const eraserHoverRef = useRef<Point | null>(null);
   const [, bump] = useState(0);
 
   const redraw = useCallback(() => {
@@ -137,7 +141,19 @@ export const InkOverlay = forwardRef<InkOverlayHandle, Props>(function InkOverla
       }
       ctx.stroke();
     }
-  }, []);
+    if (tool === "erase" && eraserHoverRef.current) {
+      const { x, y } = eraserHoverRef.current;
+      ctx.save();
+      ctx.fillStyle = "rgba(148, 163, 184, 0.28)";
+      ctx.strokeStyle = "rgba(71, 85, 105, 0.75)";
+      ctx.lineWidth = 1.5;
+      ctx.beginPath();
+      ctx.arc(x, y, eraserRadius, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.stroke();
+      ctx.restore();
+    }
+  }, [tool, eraserRadius]);
 
   const persist = useCallback(() => {
     try {
@@ -171,7 +187,8 @@ export const InkOverlay = forwardRef<InkOverlayHandle, Props>(function InkOverla
     const rect = parent.getBoundingClientRect();
     const w = Math.max(1, rect.width);
     const h = Math.max(1, rect.height);
-    const dpr = Math.min(window.devicePixelRatio || 1, 2);
+    const base = window.devicePixelRatio || 1;
+    const dpr = Math.min(5, Math.max(1, base * Math.max(1, viewportScale)));
     canvas.width = Math.floor(w * dpr);
     canvas.height = Math.floor(h * dpr);
     canvas.style.width = `${w}px`;
@@ -179,7 +196,7 @@ export const InkOverlay = forwardRef<InkOverlayHandle, Props>(function InkOverla
     const ctx = canvas.getContext("2d");
     if (ctx) ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     redraw();
-  }, [redraw]);
+  }, [redraw, viewportScale]);
 
   useEffect(() => {
     resizeToContainer();
@@ -187,11 +204,12 @@ export const InkOverlay = forwardRef<InkOverlayHandle, Props>(function InkOverla
     const parent = canvasRef.current?.parentElement;
     if (parent) ro.observe(parent);
     return () => ro.disconnect();
-  }, [resizeToContainer]);
+  }, [resizeToContainer, viewportScale]);
 
   useEffect(() => {
     currentRef.current = null;
     activeDrawPointerId.current = null;
+    if (tool !== "erase") eraserHoverRef.current = null;
     redraw();
   }, [tool, redraw]);
 
@@ -205,6 +223,7 @@ export const InkOverlay = forwardRef<InkOverlayHandle, Props>(function InkOverla
         activeTouchPanId.current = null;
         touchCoordsRef.current.clear();
         pinchTouchActive.current = false;
+        eraserHoverRef.current = null;
         persist();
         redraw();
         bump((n) => n + 1);
@@ -213,12 +232,24 @@ export const InkOverlay = forwardRef<InkOverlayHandle, Props>(function InkOverla
     [persist, redraw],
   );
 
-  const clientPoint = (e: React.PointerEvent<HTMLCanvasElement>): Point => {
+  const clientPointFromClient = useCallback((clientX: number, clientY: number): Point => {
     const canvas = canvasRef.current;
     if (!canvas) return { x: 0, y: 0 };
     const rect = canvas.getBoundingClientRect();
-    return { x: e.clientX - rect.left, y: e.clientY - rect.top };
-  };
+    return { x: clientX - rect.left, y: clientY - rect.top };
+  }, []);
+
+  function coalescedPointerMoves(
+    e: React.PointerEvent<HTMLCanvasElement>,
+  ): ReadonlyArray<{ clientX: number; clientY: number }> {
+    if (e.pointerType === "touch") return [e];
+    const ne = e.nativeEvent;
+    if (ne instanceof PointerEvent && typeof ne.getCoalescedEvents === "function") {
+      const c = ne.getCoalescedEvents();
+      if (c.length > 0) return c;
+    }
+    return [e];
+  }
 
   const onPointerDown = (e: React.PointerEvent<HTMLCanvasElement>) => {
     if (e.pointerType === "touch") {
@@ -255,6 +286,7 @@ export const InkOverlay = forwardRef<InkOverlayHandle, Props>(function InkOverla
       return;
     }
 
+    /** 펜·마우스: 필기/지우개. 이동·확대는 손가락만(ZoomPanSurface에서 펜 제외). */
     if (e.pointerType !== "pen" && e.pointerType !== "mouse") return;
     e.preventDefault();
     e.currentTarget.setPointerCapture(e.pointerId);
@@ -262,21 +294,23 @@ export const InkOverlay = forwardRef<InkOverlayHandle, Props>(function InkOverla
 
     if (tool === "erase") {
       currentRef.current = null;
-      const p = clientPoint(e);
+      const p = clientPointFromClient(e.clientX, e.clientY);
+      eraserHoverRef.current = p;
       const next = eraseStrokesAt(strokesRef.current, p.x, p.y, eraserRadius);
       if (next.length !== strokesRef.current.length) {
         strokesRef.current = next;
         persist();
-        redraw();
         bump((n) => n + 1);
       }
+      redraw();
       return;
     }
 
+    eraserHoverRef.current = null;
     currentRef.current = {
       color: strokeColor,
       width: strokeWidth,
-      points: [clientPoint(e)],
+      points: [clientPointFromClient(e.clientX, e.clientY)],
     };
   };
 
@@ -297,26 +331,40 @@ export const InkOverlay = forwardRef<InkOverlayHandle, Props>(function InkOverla
       return;
     }
 
-    if (activeDrawPointerId.current !== e.pointerId) return;
-
-    if (tool === "erase") {
-      const p = clientPoint(e);
-      const next = eraseStrokesAt(strokesRef.current, p.x, p.y, eraserRadius);
-      if (next.length !== strokesRef.current.length) {
-        strokesRef.current = next;
-        persist();
+    if ((e.pointerType === "pen" || e.pointerType === "mouse") && tool === "erase") {
+      eraserHoverRef.current = clientPointFromClient(e.clientX, e.clientY);
+      if (activeDrawPointerId.current === e.pointerId) {
+        const list = coalescedPointerMoves(e);
+        let changed = false;
+        for (const ev of list) {
+          const p = clientPointFromClient(ev.clientX, ev.clientY);
+          const next = eraseStrokesAt(strokesRef.current, p.x, p.y, eraserRadius);
+          if (next.length !== strokesRef.current.length) {
+            strokesRef.current = next;
+            changed = true;
+          }
+        }
+        if (changed) persist();
         redraw();
-        bump((n) => n + 1);
+        if (changed) bump((n) => n + 1);
+      } else {
+        redraw();
       }
       return;
     }
 
+    if (activeDrawPointerId.current !== e.pointerId) return;
+
     if (!currentRef.current) return;
-    const p = clientPoint(e);
+    const minDist = Math.max(0.04, Math.min(0.85, strokeWidth * 0.065));
+    const list = coalescedPointerMoves(e);
     const pts = currentRef.current.points;
-    const last = pts.length > 0 ? pts[pts.length - 1] : null;
-    if (last && distance(last, p) < 0.35) return;
-    pts.push(p);
+    for (const ev of list) {
+      const p = clientPointFromClient(ev.clientX, ev.clientY);
+      const last = pts.length > 0 ? pts[pts.length - 1] : null;
+      if (last && distance(last, p) < minDist) continue;
+      pts.push(p);
+    }
     redraw();
   };
 
@@ -350,6 +398,7 @@ export const InkOverlay = forwardRef<InkOverlayHandle, Props>(function InkOverla
       } catch {
         // ignore
       }
+      redraw();
       return;
     }
 
@@ -367,6 +416,11 @@ export const InkOverlay = forwardRef<InkOverlayHandle, Props>(function InkOverla
     }
   };
 
+  const onPointerLeave = () => {
+    eraserHoverRef.current = null;
+    redraw();
+  };
+
   return (
     <canvas
       ref={canvasRef}
@@ -374,6 +428,7 @@ export const InkOverlay = forwardRef<InkOverlayHandle, Props>(function InkOverla
       style={{ touchAction: "none" }}
       onPointerDown={onPointerDown}
       onPointerMove={onPointerMove}
+      onPointerLeave={onPointerLeave}
       onPointerUp={endStroke}
       onPointerCancel={endStroke}
     />

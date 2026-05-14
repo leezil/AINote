@@ -165,6 +165,8 @@ export function ZoomPanSurface({
 
   const onPointerDown = (e: ReactPointerEvent<HTMLDivElement>) => {
     if (!navigationMode) return;
+    /** Apple Pencil 등은 필기 레이어에서 처리 — 여기서 잡으면 펜이 먹지 않거나 패닝과 충돌함 */
+    if (e.pointerType === "pen") return;
     pointers.current.set(e.pointerId, e);
     const list = [...pointers.current.values()];
     if (list.length === 2) {
@@ -183,6 +185,7 @@ export function ZoomPanSurface({
 
   const onPointerMove = (e: ReactPointerEvent<HTMLDivElement>) => {
     if (!navigationMode) return;
+    if (e.pointerType === "pen") return;
     if (!pointers.current.has(e.pointerId)) return;
     pointers.current.set(e.pointerId, e);
     const list = [...pointers.current.values()];
@@ -204,6 +207,7 @@ export function ZoomPanSurface({
   };
 
   const endPointer = (e: ReactPointerEvent<HTMLDivElement>) => {
+    if (e.pointerType === "pen") return;
     pointers.current.delete(e.pointerId);
     if (pointers.current.size < 2) pinchSession.current = null;
     if (pointers.current.size === 0) panDrag.current = null;
@@ -211,6 +215,13 @@ export function ZoomPanSurface({
       e.currentTarget.releasePointerCapture(e.pointerId);
     } catch {
       // ignore
+    }
+  };
+
+  const ignorePenUi = (e: ReactPointerEvent<HTMLButtonElement>) => {
+    if (e.pointerType === "pen") {
+      e.preventDefault();
+      e.stopPropagation();
     }
   };
 
@@ -227,6 +238,7 @@ export function ZoomPanSurface({
         <button
           type="button"
           className="pointer-events-auto rounded-md border border-zinc-300 bg-white/95 px-2 py-1 text-sm shadow dark:border-zinc-600 dark:bg-zinc-900/95"
+          onPointerDown={ignorePenUi}
           onClick={() => setScale((s) => clampScale(s * 1.22))}
         >
           +
@@ -234,6 +246,7 @@ export function ZoomPanSurface({
         <button
           type="button"
           className="pointer-events-auto rounded-md border border-zinc-300 bg-white/95 px-2 py-1 text-sm shadow dark:border-zinc-600 dark:bg-zinc-900/95"
+          onPointerDown={ignorePenUi}
           onClick={() => setScale((s) => clampScale(s / 1.22))}
         >
           −
@@ -241,6 +254,7 @@ export function ZoomPanSurface({
         <button
           type="button"
           className="pointer-events-auto rounded-md border border-zinc-300 bg-white/95 px-2 py-1 text-xs shadow dark:border-zinc-600 dark:bg-zinc-900/95"
+          onPointerDown={ignorePenUi}
           onClick={reset}
         >
           초기화
@@ -267,6 +281,8 @@ export function ZoomPanSurface({
           style={{
             transform: `translate(${pan.x}px, ${pan.y}px) scale(${scale})`,
             transformOrigin: "center center",
+            backfaceVisibility: "hidden",
+            WebkitBackfaceVisibility: "hidden" as const,
           }}
         >
           {children}

@@ -83,9 +83,12 @@ export function PdfClientView({
   }, [applyMeasuredWidth, pageNumber, wideMode, fileUrl]);
 
   const baseDpr =
-    typeof window !== "undefined" ? Math.min(window.devicePixelRatio || 1, 2.5) : 1;
-  /** CSS scale로 키운 만큼 캔버스 내부 해상도를 맞춤(상한으로 메모리 제한). */
-  const pdfDevicePixelRatio = Math.min(8, baseDpr * Math.max(1, viewportScale));
+    typeof window !== "undefined" ? Math.min(window.devicePixelRatio || 1, 3) : 1;
+  /** CSS 확대 배율만큼 내부 렌더 해상도를 올려 transform scale 후에도 덜 깨지게 함 */
+  const pdfDevicePixelRatio = Math.min(
+    14,
+    Math.max(1.25, baseDpr * Math.max(1, viewportScale) * 1.08),
+  );
 
   const file = useMemo(() => ({ url: fileUrl }), [fileUrl]);
 

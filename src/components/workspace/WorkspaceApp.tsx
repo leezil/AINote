@@ -850,6 +850,7 @@ export function WorkspaceApp() {
                     strokeColor={inkColor}
                     strokeWidth={inkWidth}
                     eraserRadius={eraserRadius}
+                    viewportScale={viewportPdfScale}
                     touchPanBridge={touchPanBridgeRef}
                     className={[
                       "absolute inset-0 z-10",
