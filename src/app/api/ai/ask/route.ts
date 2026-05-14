@@ -3,7 +3,7 @@ import { headers } from "next/headers";
 import { AskRequestSchema } from "@/lib/ai/ask-schema";
 import { askGeminiScoped } from "@/lib/ai/gemini-scoped-ask";
 import { extractPdfAllPagesText, extractPdfPageText } from "@/lib/documents/pdf-text";
-import { createDocumentStore } from "@/lib/storage/document-store";
+import { createDocumentStore, AI_SUCCESS_ASK_PURGE_EVERY } from "@/lib/storage/document-store";
 import { getWorkspaceContextFromRequestHeaders } from "@/lib/workspace/resolve-workspace";
 
 export const runtime = "nodejs";
@@ -11,6 +11,21 @@ export const maxDuration = 60;
 
 const MAX_TEXT_FILE_CHARS = 20_000;
 const MAX_PDF_FULL_TEXT_CHARS = 80_000;
+
+function documentMissingMessage(): string {
+  if (process.env.VERCEL === "1" && !process.env.BLOB_READ_WRITE_TOKEN?.trim()) {
+    return "문서를 서버에서 찾을 수 없습니다. Vercel은 요청마다 다른 인스턴스가 실행되어 /tmp 저장이 이어지지 않을 수 있습니다. Vercel Dashboard → Storage → Blob으로 스토어를 만든 뒤, 프로젝트 환경 변수에 BLOB_READ_WRITE_TOKEN을 넣고 문서를 다시 업로드해 주세요.";
+  }
+  return "문서를 찾을 수 없습니다. 새로고침 후 다시 업로드하거나 목록에서 문서를 다시 여세요.";
+}
+
+async function jsonAnswerWithAskAccounting(
+  store: ReturnType<typeof createDocumentStore>,
+  answer: string,
+) {
+  await store.recordSuccessfulAiAsk(AI_SUCCESS_ASK_PURGE_EVERY);
+  return NextResponse.json({ answer });
+}
 
 export async function POST(req: Request) {
   const hdrs = await headers();
@@ -37,8 +52,11 @@ export async function POST(req: Request) {
   try {
     if (body.scope.kind === "pdf_page_text") {
       const meta = await store.getMeta(body.scope.documentId);
-      if (!meta || meta.kind !== "pdf") {
-        return NextResponse.json({ error: "PDF 문서를 찾을 수 없습니다." }, { status: 404 });
+      if (!meta) {
+        return NextResponse.json({ error: documentMissingMessage() }, { status: 404 });
+      }
+      if (meta.kind !== "pdf") {
+        return NextResponse.json({ error: "해당 파일은 PDF가 아닙니다." }, { status: 400 });
       }
       const bytes = await store.readFileBytes(body.scope.documentId);
       if (!bytes) {
@@ -53,13 +71,16 @@ export async function POST(req: Request) {
         scopeDescription: `PDF "${meta.filename}"의 ${body.scope.page}/${pageCount} 페이지 텍스트 추출분`,
         scopeText: text.length > 0 ? text : "(이 페이지에서 추출된 텍스트가 비어 있습니다. 스캔 PDF일 수 있습니다.)",
       });
-      return NextResponse.json({ answer });
+      return await jsonAnswerWithAskAccounting(store, answer);
     }
 
     if (body.scope.kind === "pdf_full_text") {
       const meta = await store.getMeta(body.scope.documentId);
-      if (!meta || meta.kind !== "pdf") {
-        return NextResponse.json({ error: "PDF 문서를 찾을 수 없습니다." }, { status: 404 });
+      if (!meta) {
+        return NextResponse.json({ error: documentMissingMessage() }, { status: 404 });
+      }
+      if (meta.kind !== "pdf") {
+        return NextResponse.json({ error: "해당 파일은 PDF가 아닙니다." }, { status: 400 });
       }
       const bytes = await store.readFileBytes(body.scope.documentId);
       if (!bytes) {
@@ -75,13 +96,16 @@ export async function POST(req: Request) {
         scopeText: text,
         maxTextChars: MAX_PDF_FULL_TEXT_CHARS,
       });
-      return NextResponse.json({ answer });
+      return await jsonAnswerWithAskAccounting(store, answer);
     }
 
     if (body.scope.kind === "pdf_page_text_plus_viewport") {
       const meta = await store.getMeta(body.scope.documentId);
-      if (!meta || meta.kind !== "pdf") {
-        return NextResponse.json({ error: "PDF 문서를 찾을 수 없습니다." }, { status: 404 });
+      if (!meta) {
+        return NextResponse.json({ error: documentMissingMessage() }, { status: 404 });
+      }
+      if (meta.kind !== "pdf") {
+        return NextResponse.json({ error: "해당 파일은 PDF가 아닙니다." }, { status: 400 });
       }
       const bytes = await store.readFileBytes(body.scope.documentId);
       if (!bytes) {
@@ -100,7 +124,7 @@ export async function POST(req: Request) {
           mimeType: body.scope.viewportMimeType,
         },
       });
-      return NextResponse.json({ answer });
+      return await jsonAnswerWithAskAccounting(store, answer);
     }
 
     if (body.scope.kind === "viewport_only") {
@@ -112,13 +136,16 @@ export async function POST(req: Request) {
           mimeType: body.scope.viewportMimeType,
         },
       });
-      return NextResponse.json({ answer });
+      return await jsonAnswerWithAskAccounting(store, answer);
     }
 
     if (body.scope.kind === "text_file") {
       const meta = await store.getMeta(body.scope.documentId);
-      if (!meta || meta.kind !== "text") {
-        return NextResponse.json({ error: "텍스트 문서를 찾을 수 없습니다." }, { status: 404 });
+      if (!meta) {
+        return NextResponse.json({ error: documentMissingMessage() }, { status: 404 });
+      }
+      if (meta.kind !== "text") {
+        return NextResponse.json({ error: "해당 파일은 텍스트 문서가 아닙니다." }, { status: 400 });
       }
       const bytes = await store.readFileBytes(body.scope.documentId);
       if (!bytes) {
@@ -135,13 +162,16 @@ export async function POST(req: Request) {
         scopeText: clipped,
         maxTextChars: MAX_TEXT_FILE_CHARS,
       });
-      return NextResponse.json({ answer });
+      return await jsonAnswerWithAskAccounting(store, answer);
     }
 
     if (body.scope.kind === "image_file") {
       const meta = await store.getMeta(body.scope.documentId);
-      if (!meta || meta.kind !== "image") {
-        return NextResponse.json({ error: "이미지 문서를 찾을 수 없습니다." }, { status: 404 });
+      if (!meta) {
+        return NextResponse.json({ error: documentMissingMessage() }, { status: 404 });
+      }
+      if (meta.kind !== "image") {
+        return NextResponse.json({ error: "해당 파일은 이미지가 아닙니다." }, { status: 400 });
       }
       const bytes = await store.readFileBytes(body.scope.documentId);
       if (!bytes) {
@@ -157,7 +187,7 @@ export async function POST(req: Request) {
           mimeType: mime,
         },
       });
-      return NextResponse.json({ answer });
+      return await jsonAnswerWithAskAccounting(store, answer);
     }
 
     return NextResponse.json({ error: "Unsupported scope." }, { status: 400 });

@@ -6,6 +6,7 @@ import { inferKindFromMime, normalizeMime } from "@/lib/documents/mime";
 import {
   createDocumentStore,
   type StoredDocumentMeta,
+  WORKSPACE_STORAGE_CAP_BYTES,
 } from "@/lib/storage/document-store";
 import { getWorkspaceContextFromRequestHeaders } from "@/lib/workspace/resolve-workspace";
 
@@ -87,6 +88,21 @@ export async function POST(req: Request) {
     };
 
     const store = createDocumentStore(workspaceId);
+    await store.ensureReady();
+    try {
+      await store.ensureRoomForUpload(buffer.byteLength, WORKSPACE_STORAGE_CAP_BYTES);
+    } catch (e) {
+      if (e instanceof Error && e.message === "AINOTE_UPLOAD_EXCEEDS_CAP") {
+        return NextResponse.json(
+          {
+            error:
+              "저장 용량 1GB 한도를 초과합니다. 기존 문서를 지워도 새 파일이 너무 크거나, 비울 수 없습니다.",
+          },
+          { status: 413 },
+        );
+      }
+      throw e;
+    }
     await store.appendDocument(meta, buffer);
 
     return NextResponse.json({ document: meta });
