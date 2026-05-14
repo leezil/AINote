@@ -1,6 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { del, list, put } from "@vercel/blob";
+import { del, get, list, put } from "@vercel/blob";
 import { getDataStoreRoot } from "@/lib/storage/data-root";
 import {
   AI_SUCCESS_ASK_PURGE_EVERY,
@@ -20,7 +20,7 @@ export type StoredDocumentMeta = {
   pageCount: number;
   bytes: number;
   createdAt: string;
-  /** Vercel Blob public URL when using {@link BlobDocumentStore}. */
+  /** Vercel Blob URL when using {@link BlobDocumentStore} (public or private 스토어에 따라 다름). */
   blobUrl?: string;
 };
 
@@ -202,6 +202,29 @@ export class BlobDocumentStore {
     return `${this.prefix()}/files/${documentId}`;
   }
 
+  /**
+   * Vercel Blob 스토어가 private이면 `put(..., { access: "public" })`가 거부됩니다.
+   * public 전용 스토어는 환경 변수 `AINOTE_BLOB_ACCESS=public` 로 맞추세요.
+   */
+  private blobPutAccess(): "public" | "private" {
+    const v = process.env.AINOTE_BLOB_ACCESS?.trim().toLowerCase();
+    if (v === "public") return "public";
+    return "private";
+  }
+
+  /** private Blob URL은 토큰이 있는 `get`으로만 읽을 수 있습니다. */
+  private async readBlobUrlBytes(url: string): Promise<Buffer | null> {
+    const isPrivateHost = url.includes(".private.blob.");
+    if (isPrivateHost) {
+      const g = await get(url, { access: "private", token: this.token() });
+      if (!g || g.statusCode !== 200 || !g.stream) return null;
+      return Buffer.from(await new Response(g.stream).arrayBuffer());
+    }
+    const res = await fetch(url, { cache: "no-store" });
+    if (!res.ok) return null;
+    return Buffer.from(await res.arrayBuffer());
+  }
+
   private async readManifest(): Promise<Manifest> {
     const { blobs } = await list({
       prefix: `${this.prefix()}/`,
@@ -210,9 +233,9 @@ export class BlobDocumentStore {
     });
     const man = blobs.find((b) => b.pathname === this.manifestPathname());
     if (!man) return { documents: [], aiAskCount: 0 };
-    const res = await fetch(man.url, { cache: "no-store" });
-    if (!res.ok) return { documents: [], aiAskCount: 0 };
-    const parsed = (await res.json()) as unknown;
+    const raw = await this.readBlobUrlBytes(man.url);
+    if (!raw) return { documents: [], aiAskCount: 0 };
+    const parsed = JSON.parse(raw.toString("utf8")) as unknown;
     const documents = (parsed as { documents?: StoredDocumentMeta[] }).documents ?? [];
     return {
       documents,
@@ -226,7 +249,7 @@ export class BlobDocumentStore {
       aiAskCount: m.aiAskCount ?? 0,
     };
     await put(this.manifestPathname(), JSON.stringify(out), {
-      access: "public",
+      access: this.blobPutAccess(),
       addRandomSuffix: false,
       allowOverwrite: true,
       contentType: "application/json; charset=utf-8",
@@ -246,9 +269,7 @@ export class BlobDocumentStore {
   async readFileBytes(documentId: string): Promise<Buffer | null> {
     const meta = await this.getMeta(documentId);
     if (!meta?.blobUrl) return null;
-    const res = await fetch(meta.blobUrl, { cache: "no-store" });
-    if (!res.ok) return null;
-    return Buffer.from(await res.arrayBuffer());
+    return this.readBlobUrlBytes(meta.blobUrl);
   }
 
   async getMeta(documentId: string): Promise<StoredDocumentMeta | null> {
@@ -276,7 +297,7 @@ export class BlobDocumentStore {
 
   async appendDocument(meta: StoredDocumentMeta, data: Buffer): Promise<void> {
     const uploaded = await put(this.filePathname(meta.id), data, {
-      access: "public",
+      access: this.blobPutAccess(),
       addRandomSuffix: false,
       allowOverwrite: true,
       contentType: meta.mime,
