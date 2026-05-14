@@ -5,21 +5,25 @@ import {
   useCallback,
   useEffect,
   useImperativeHandle,
+  useLayoutEffect,
   useRef,
   useState,
-  type MutableRefObject,
 } from "react";
 
-export type ZoomPanTouchBridge = {
-  beginTouchPan: (clientX: number, clientY: number) => void;
-  moveTouchPan: (clientX: number, clientY: number) => void;
-  endTouchPan: () => void;
-  beginPinch?: (distanceBetweenTouches: number) => void;
-  updatePinch?: (distanceBetweenTouches: number) => void;
-  endPinch?: () => void;
-};
-
 type Point = { x: number; y: number };
+
+export type InkTool = "draw" | "erase";
+
+type Props = {
+  storageKey: string;
+  className?: string;
+  strokeColor?: string;
+  strokeWidth?: number;
+  eraserRadius?: number;
+  tool: InkTool;
+  /** ZoomPanSurface CSS scale과 맞춰 캔버스 내부 해상도를 올림(확대 시 선명도). */
+  viewportScale?: number;
+};
 
 export type Stroke = {
   color: string;
@@ -33,43 +37,8 @@ export type InkOverlayHandle = {
   syncLayout: () => void;
 };
 
-export type InkTool = "draw" | "erase";
-
-type Props = {
-  storageKey: string;
-  className?: string;
-  strokeColor?: string;
-  strokeWidth?: number;
-  eraserRadius?: number;
-  tool: InkTool;
-  /** ZoomPanSurface CSS scale과 맞춰 캔버스 내부 해상도를 올림(확대 시 선명도). */
-  viewportScale?: number;
-  /** 손가락(touch) 한 손 드래그를 뷰 이동으로 연결 (필기/지우개 모드에서 사용). */
-  touchPanBridge?: MutableRefObject<ZoomPanTouchBridge | null> | null;
-};
-
 function distance(a: Point, b: Point): number {
   return Math.hypot(a.x - b.x, a.y - b.y);
-}
-
-/**
- * 일부 기기·브라우저는 스타일러스를 `pointerType: "touch"`로 보냅니다.
- * 손가락은 보통 더 큰 contact ellipse(width/height)를 가집니다.
- * 크기를 알 수 없을 때는 `(pointer: coarse)` 환경에선 필기 우선(스타일러스 오인 방지),
- * 데스크톱 터치스크린 등은 기존처럼 손가락=패닝으로 둡니다.
- */
-function isLikelyFingerTouch(e: React.PointerEvent<HTMLCanvasElement>): boolean {
-  if (e.pointerType !== "touch") return false;
-  const w = e.width ?? 0;
-  const h = e.height ?? 0;
-  if (w > 0 && h > 0) {
-    const geom = Math.sqrt(w * h);
-    return geom >= 11;
-  }
-  if (typeof window !== "undefined" && window.matchMedia?.("(pointer: coarse)").matches) {
-    return false;
-  }
-  return true;
 }
 
 function pointSegmentDistance(
@@ -117,7 +86,6 @@ export const InkOverlay = forwardRef<InkOverlayHandle, Props>(function InkOverla
     eraserRadius = 16,
     tool,
     viewportScale = 1,
-    touchPanBridge = null,
   },
   ref,
 ) {
@@ -125,9 +93,6 @@ export const InkOverlay = forwardRef<InkOverlayHandle, Props>(function InkOverla
   const strokesRef = useRef<Stroke[]>([]);
   const currentRef = useRef<Stroke | null>(null);
   const activeDrawPointerId = useRef<number | null>(null);
-  const activeTouchPanId = useRef<number | null>(null);
-  const touchCoordsRef = useRef<Map<number, { x: number; y: number }>>(new Map());
-  const pinchTouchActive = useRef(false);
   const eraserHoverRef = useRef<Point | null>(null);
   const [, bump] = useState(0);
   const lastAllocRef = useRef<{ cssW: number; cssH: number; dpr: number }>({
@@ -214,7 +179,6 @@ export const InkOverlay = forwardRef<InkOverlayHandle, Props>(function InkOverla
     const pr = parent?.getBoundingClientRect();
     const cw0 = canvas.clientWidth;
     const ch0 = canvas.clientHeight;
-    /** absolute inset-0 등에서 캔버스 client*가 0인 프레임이 있으면 부모 박스로 측정 */
     const w = Math.max(
       1,
       Math.round(
@@ -275,9 +239,6 @@ export const InkOverlay = forwardRef<InkOverlayHandle, Props>(function InkOverla
         strokesRef.current = [];
         currentRef.current = null;
         activeDrawPointerId.current = null;
-        activeTouchPanId.current = null;
-        touchCoordsRef.current.clear();
-        pinchTouchActive.current = false;
         eraserHoverRef.current = null;
         persist();
         redraw();
@@ -302,208 +263,164 @@ export const InkOverlay = forwardRef<InkOverlayHandle, Props>(function InkOverla
     return { x, y };
   }, []);
 
-  function coalescedPointerMoves(
-    e: React.PointerEvent<HTMLCanvasElement>,
-  ): ReadonlyArray<{ clientX: number; clientY: number }> {
-    if (e.pointerType === "touch") return [e];
-    const ne = e.nativeEvent;
-    if (ne instanceof PointerEvent && typeof ne.getCoalescedEvents === "function") {
-      const c = ne.getCoalescedEvents();
-      if (c.length > 0) return c;
-    }
-    return [e];
-  }
+  const handlersRef = useRef({ persist, redraw, clientPointFromClient });
+  handlersRef.current = { persist, redraw, clientPointFromClient };
 
-  const onPointerDown = (e: React.PointerEvent<HTMLCanvasElement>) => {
-    if (e.pointerType === "touch" && isLikelyFingerTouch(e)) {
-      if (!touchPanBridge?.current) return;
-      e.stopPropagation();
+  const inkParamsRef = useRef({
+    tool: "draw" as InkTool,
+    strokeColor: "#2563eb",
+    strokeWidth: 2.4,
+    eraserRadius: 16,
+  });
+  inkParamsRef.current = { tool, strokeColor, strokeWidth, eraserRadius };
+
+  useLayoutEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+
+    const passiveFalse: AddEventListenerOptions = { passive: false };
+
+    function coalesced(ev: PointerEvent): ReadonlyArray<PointerEvent> {
+      if (typeof ev.getCoalescedEvents === "function") {
+        const c = ev.getCoalescedEvents();
+        if (c.length > 0) return c;
+      }
+      return [ev];
+    }
+
+    const onPointerDown = (e: PointerEvent) => {
       e.preventDefault();
-      touchCoordsRef.current.set(e.pointerId, { x: e.clientX, y: e.clientY });
-
-      if (touchCoordsRef.current.size >= 2) {
-        if (activeTouchPanId.current !== null) {
-          const pid = activeTouchPanId.current;
-          touchPanBridge.current.endTouchPan();
-          activeTouchPanId.current = null;
-          try {
-            e.currentTarget.releasePointerCapture(pid);
-          } catch {
-            // ignore
-          }
-        }
-        const d0 = (() => {
-          const pts = [...touchCoordsRef.current.values()];
-          if (pts.length < 2) return 0;
-          return Math.hypot(pts[0].x - pts[1].x, pts[0].y - pts[1].y);
-        })();
-        if (d0 > 8) {
-          pinchTouchActive.current = true;
-          touchPanBridge.current.beginPinch?.(d0);
-        }
-        return;
-      }
-
-      e.currentTarget.setPointerCapture(e.pointerId);
-      activeTouchPanId.current = e.pointerId;
-      touchPanBridge.current.beginTouchPan(e.clientX, e.clientY);
-      return;
-    }
-
-    /** 손가락 패닝 외에는 필기 */
-    e.preventDefault();
-    e.currentTarget.setPointerCapture(e.pointerId);
-    activeDrawPointerId.current = e.pointerId;
-
-    if (tool === "erase") {
-      currentRef.current = null;
-      const p = clientPointFromClient(e.clientX, e.clientY);
-      eraserHoverRef.current = p;
-      const next = eraseStrokesAt(strokesRef.current, p.x, p.y, eraserRadius);
-      if (next.length !== strokesRef.current.length) {
-        strokesRef.current = next;
-        persist();
-        bump((n) => n + 1);
-      }
-      redraw();
-      return;
-    }
-
-    eraserHoverRef.current = null;
-    currentRef.current = {
-      color: strokeColor,
-      width: strokeWidth,
-      points: [clientPointFromClient(e.clientX, e.clientY)],
-    };
-  };
-
-  const onPointerMove = (e: React.PointerEvent<HTMLCanvasElement>) => {
-    if (e.pointerType === "touch") {
-      const fingerSession =
-        touchCoordsRef.current.has(e.pointerId) ||
-        activeTouchPanId.current === e.pointerId;
-      if (fingerSession) {
-        if (touchCoordsRef.current.has(e.pointerId)) {
-          touchCoordsRef.current.set(e.pointerId, { x: e.clientX, y: e.clientY });
-        }
-        if (pinchTouchActive.current && touchCoordsRef.current.size >= 2) {
-          const pts = [...touchCoordsRef.current.values()];
-          const d1 = Math.hypot(pts[0].x - pts[1].x, pts[0].y - pts[1].y);
-          touchPanBridge?.current?.updatePinch?.(d1);
-          return;
-        }
-        if (activeTouchPanId.current === e.pointerId && touchCoordsRef.current.size === 1) {
-          touchPanBridge?.current?.moveTouchPan(e.clientX, e.clientY);
-        }
-        return;
-      }
-    }
-
-    if (tool === "erase") {
-      eraserHoverRef.current = clientPointFromClient(e.clientX, e.clientY);
-      if (activeDrawPointerId.current === e.pointerId) {
-        const list = coalescedPointerMoves(e);
-        let changed = false;
-        for (const ev of list) {
-          const p = clientPointFromClient(ev.clientX, ev.clientY);
-          const next = eraseStrokesAt(strokesRef.current, p.x, p.y, eraserRadius);
-          if (next.length !== strokesRef.current.length) {
-            strokesRef.current = next;
-            changed = true;
-          }
-        }
-        if (changed) persist();
-        redraw();
-        if (changed) bump((n) => n + 1);
-      } else {
-        redraw();
-      }
-      return;
-    }
-
-    if (activeDrawPointerId.current !== e.pointerId) return;
-
-    if (!currentRef.current) return;
-    const minDist = Math.max(0.04, Math.min(0.85, strokeWidth * 0.065));
-    const list = coalescedPointerMoves(e);
-    const pts = currentRef.current.points;
-    for (const ev of list) {
-      const p = clientPointFromClient(ev.clientX, ev.clientY);
-      const last = pts.length > 0 ? pts[pts.length - 1] : null;
-      if (last && distance(last, p) < minDist) continue;
-      pts.push(p);
-    }
-    redraw();
-  };
-
-  const endStroke = (e: React.PointerEvent<HTMLCanvasElement>) => {
-    if (e.pointerType === "touch") {
-      const fingerSession =
-        touchCoordsRef.current.has(e.pointerId) ||
-        activeTouchPanId.current === e.pointerId;
-      if (fingerSession) {
-        touchCoordsRef.current.delete(e.pointerId);
-        if (touchCoordsRef.current.size < 2) {
-          if (pinchTouchActive.current) {
-            pinchTouchActive.current = false;
-            touchPanBridge?.current?.endPinch?.();
-          }
-        }
-        if (activeTouchPanId.current === e.pointerId) {
-          activeTouchPanId.current = null;
-          touchPanBridge?.current?.endTouchPan();
-          try {
-            e.currentTarget.releasePointerCapture(e.pointerId);
-          } catch {
-            // ignore
-          }
-        }
-        return;
-      }
-    }
-
-    if (activeDrawPointerId.current !== e.pointerId) return;
-    activeDrawPointerId.current = null;
-
-    if (tool === "erase") {
+      e.stopPropagation();
       try {
-        e.currentTarget.releasePointerCapture(e.pointerId);
+        canvas.setPointerCapture(e.pointerId);
       } catch {
         // ignore
       }
-      redraw();
-      return;
-    }
+      activeDrawPointerId.current = e.pointerId;
+      const params = inkParamsRef.current;
+      const { clientPointFromClient: toLocal, persist: persistFn, redraw: redrawFn } =
+        handlersRef.current;
 
-    if (currentRef.current && currentRef.current.points.length > 1) {
-      strokesRef.current.push(currentRef.current);
-      persist();
-    }
-    currentRef.current = null;
-    redraw();
-    bump((n) => n + 1);
-    try {
-      e.currentTarget.releasePointerCapture(e.pointerId);
-    } catch {
-      // ignore
-    }
-  };
+      if (params.tool === "erase") {
+        currentRef.current = null;
+        const p = toLocal(e.clientX, e.clientY);
+        eraserHoverRef.current = p;
+        const next = eraseStrokesAt(strokesRef.current, p.x, p.y, params.eraserRadius);
+        if (next.length !== strokesRef.current.length) {
+          strokesRef.current = next;
+          persistFn();
+          bump((n) => n + 1);
+        }
+        redrawFn();
+        return;
+      }
 
-  const onPointerLeave = () => {
-    eraserHoverRef.current = null;
-    redraw();
-  };
+      eraserHoverRef.current = null;
+      currentRef.current = {
+        color: params.strokeColor,
+        width: params.strokeWidth,
+        points: [toLocal(e.clientX, e.clientY)],
+      };
+    };
+
+    const onPointerMove = (e: PointerEvent) => {
+      e.preventDefault();
+      const params = inkParamsRef.current;
+      const { clientPointFromClient: toLocal, persist: persistFn, redraw: redrawFn } =
+        handlersRef.current;
+
+      if (params.tool === "erase") {
+        eraserHoverRef.current = toLocal(e.clientX, e.clientY);
+        if (activeDrawPointerId.current === e.pointerId) {
+          const list = coalesced(e);
+          let changed = false;
+          for (const ev of list) {
+            const p = toLocal(ev.clientX, ev.clientY);
+            const next = eraseStrokesAt(strokesRef.current, p.x, p.y, params.eraserRadius);
+            if (next.length !== strokesRef.current.length) {
+              strokesRef.current = next;
+              changed = true;
+            }
+          }
+          if (changed) persistFn();
+          redrawFn();
+          if (changed) bump((n) => n + 1);
+        } else {
+          redrawFn();
+        }
+        return;
+      }
+
+      if (activeDrawPointerId.current !== e.pointerId) return;
+      if (!currentRef.current) return;
+
+      const minDist = Math.max(0.04, Math.min(0.85, params.strokeWidth * 0.065));
+      const list = coalesced(e);
+      const pts = currentRef.current.points;
+      for (const ev of list) {
+        const p = toLocal(ev.clientX, ev.clientY);
+        const last = pts.length > 0 ? pts[pts.length - 1] : null;
+        if (last && distance(last, p) < minDist) continue;
+        pts.push(p);
+      }
+      redrawFn();
+    };
+
+    const endStroke = (e: PointerEvent) => {
+      if (activeDrawPointerId.current !== e.pointerId) return;
+      activeDrawPointerId.current = null;
+      const params = inkParamsRef.current;
+      const { persist: persistFn, redraw: redrawFn } = handlersRef.current;
+
+      if (params.tool === "erase") {
+        try {
+          canvas.releasePointerCapture(e.pointerId);
+        } catch {
+          // ignore
+        }
+        redrawFn();
+        return;
+      }
+
+      if (currentRef.current && currentRef.current.points.length > 1) {
+        strokesRef.current.push(currentRef.current);
+        persistFn();
+      }
+      currentRef.current = null;
+      redrawFn();
+      bump((n) => n + 1);
+      try {
+        canvas.releasePointerCapture(e.pointerId);
+      } catch {
+        // ignore
+      }
+    };
+
+    const onPointerLeave = () => {
+      eraserHoverRef.current = null;
+      handlersRef.current.redraw();
+    };
+
+    canvas.addEventListener("pointerdown", onPointerDown, passiveFalse);
+    canvas.addEventListener("pointermove", onPointerMove, passiveFalse);
+    canvas.addEventListener("pointerup", endStroke, passiveFalse);
+    canvas.addEventListener("pointercancel", endStroke, passiveFalse);
+    canvas.addEventListener("pointerleave", onPointerLeave);
+
+    return () => {
+      canvas.removeEventListener("pointerdown", onPointerDown, passiveFalse);
+      canvas.removeEventListener("pointermove", onPointerMove, passiveFalse);
+      canvas.removeEventListener("pointerup", endStroke, passiveFalse);
+      canvas.removeEventListener("pointercancel", endStroke, passiveFalse);
+      canvas.removeEventListener("pointerleave", onPointerLeave);
+    };
+  }, []);
 
   return (
     <canvas
       ref={canvasRef}
       className={className}
       style={{ touchAction: "none" }}
-      onPointerDown={onPointerDown}
-      onPointerMove={onPointerMove}
-      onPointerLeave={onPointerLeave}
-      onPointerUp={endStroke}
-      onPointerCancel={endStroke}
     />
   );
 });

@@ -13,7 +13,7 @@ import { toJpeg } from "html-to-image";
 import type { StoredDocumentMeta } from "@/lib/storage/document-store";
 import type { AskRequest } from "@/lib/ai/ask-schema";
 import { inferPdfMaterialIntentFromQuestion } from "@/lib/ai/scope-intent";
-import { InkOverlay, type InkOverlayHandle, type ZoomPanTouchBridge } from "@/components/ink/InkOverlay";
+import { InkOverlay, type InkOverlayHandle } from "@/components/ink/InkOverlay";
 import { ZoomPanSurface } from "@/components/workspace/ZoomPanSurface";
 import { useI18n } from "@/lib/i18n/LocaleProvider";
 
@@ -76,12 +76,10 @@ export function WorkspaceApp() {
   /** 이동·확대 모드에서 CSS scale — PDF DPR 보정(일반/전체화면 각각 유지) */
   const [zoomScaleWin, setZoomScaleWin] = useState(1);
   const [zoomScaleFs, setZoomScaleFs] = useState(1);
-  const touchPanBridgeRef = useRef<ZoomPanTouchBridge | null>(null);
   const [inkColor, setInkColor] = useState("#2563eb");
   const [inkWidth, setInkWidth] = useState(2.8);
   const [eraserRadius, setEraserRadius] = useState(18);
 
-  const navigationMode = true;
   const inkLayerActive = Boolean(activeId);
   const viewportPdfScale = viewerFullscreen ? zoomScaleFs : zoomScaleWin;
   const isMdFsViewport =
@@ -763,11 +761,9 @@ export function WorkspaceApp() {
             ) : (
               <ZoomPanSurface
                 key={viewerFullscreen ? "zoom-fs" : "zoom-win"}
-                navigationMode={navigationMode}
                 className={viewerFullscreen ? "h-full min-h-0" : "min-h-[320px]"}
                 initialScale={viewerFullscreen ? zoomScaleFs : zoomScaleWin}
                 onScaleChange={handleViewerScaleChange}
-                touchBridgeRef={touchPanBridgeRef}
                 stretchContent={false}
                 viewResetKey={activeMeta ? activeMeta.id : "none"}
                 panResetKey={
@@ -841,7 +837,6 @@ export function WorkspaceApp() {
                     strokeWidth={inkWidth}
                     eraserRadius={eraserRadius}
                     viewportScale={viewportPdfScale}
-                    touchPanBridge={touchPanBridgeRef}
                     className={[
                       "absolute inset-0 z-20",
                       inkLayerActive ? "pointer-events-auto" : "pointer-events-none",
