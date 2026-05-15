@@ -475,6 +475,7 @@ export const InkOverlay = forwardRef<InkOverlayHandle, Props>(function InkOverla
         if (now >= moveDebugUntilRef.current) {
           moveDebugUntilRef.current = now + 120;
           inkDebugLog("pointerMove", {
+            logThrottleMs: 120,
             ...inkPointerDiagnostics(e),
             allowFingerInk,
             hasBridge: Boolean(bridge),

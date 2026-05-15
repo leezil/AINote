@@ -879,7 +879,13 @@ export function WorkspaceApp() {
                           : "relative z-0"
                       }
                     >
-                      <div className={inkPointerActive ? "pointer-events-none" : undefined}>
+                      <div
+                        className={
+                          inkPointerActive
+                            ? "pointer-events-none [&_*]:pointer-events-none"
+                            : undefined
+                        }
+                      >
                         <PdfClientView
                           key={activeMeta.id}
                           fileUrl={fileUrl}
@@ -908,7 +914,13 @@ export function WorkspaceApp() {
                         viewerFullscreen && inkLayerActive ? "max-h-full min-h-0 overflow-auto" : "",
                       ].join(" ")}
                     >
-                      <div className={inkPointerActive ? "pointer-events-none" : undefined}>
+                      <div
+                        className={
+                          inkPointerActive
+                            ? "pointer-events-none [&_*]:pointer-events-none"
+                            : undefined
+                        }
+                      >
                         <WorkspaceDocImage
                           fileUrl={fileUrl}
                           fetchHeaders={workspaceHeaders}
@@ -918,7 +930,13 @@ export function WorkspaceApp() {
                       </div>
                     </div>
                   ) : (
-                    <div className={inkPointerActive ? "pointer-events-none" : undefined}>
+                    <div
+                      className={
+                        inkPointerActive
+                          ? "pointer-events-none [&_*]:pointer-events-none"
+                          : undefined
+                      }
+                    >
                       <TextPreview fileUrl={fileUrl} fetchHeaders={workspaceHeaders} />
                     </div>
                   )}
