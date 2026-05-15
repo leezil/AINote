@@ -279,6 +279,14 @@ export const InkOverlay = forwardRef<InkOverlayHandle, Props>(function InkOverla
     };
   }, []);
 
+  useEffect(() => {
+    const el = canvasRef.current;
+    if (!el) return;
+    const blockSelect = (e: Event) => e.preventDefault();
+    el.addEventListener("selectstart", blockSelect);
+    return () => el.removeEventListener("selectstart", blockSelect);
+  }, []);
+
   const putInkRemote = useCallback((remote: RemoteInkConfig, strokes: Stroke[]) => {
     const q = remote.page != null ? `?page=${remote.page}` : "";
     const body =
@@ -928,8 +936,9 @@ export const InkOverlay = forwardRef<InkOverlayHandle, Props>(function InkOverla
   return (
     <canvas
       ref={canvasRef}
-      className={[className, "select-none"].filter(Boolean).join(" ") || undefined}
+      className={[className, "select-none ainote-no-select"].filter(Boolean).join(" ") || undefined}
       style={{ touchAction: "none" }}
+      onContextMenu={(e) => e.preventDefault()}
       onPointerDown={onPointerDown}
       onPointerMove={onPointerMove}
       onPointerLeave={onPointerLeave}

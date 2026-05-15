@@ -609,14 +609,31 @@ export function WorkspaceApp() {
     return () => window.removeEventListener("keydown", onKey);
   }, [activeId, gestureInk, inkLayerActive]);
 
+  /** 필기 모드에서 빠른 연속 획 후 텍스트(사이드바·헤더 등)로 선택이 넘어가는 것 방지 */
+  useEffect(() => {
+    if (!inkPointerActive) return;
+    const block = (e: Event) => {
+      e.preventDefault();
+    };
+    document.addEventListener("selectstart", block, true);
+    document.addEventListener("dragstart", block, true);
+    return () => {
+      document.removeEventListener("selectstart", block, true);
+      document.removeEventListener("dragstart", block, true);
+    };
+  }, [inkPointerActive]);
+
   return (
     <div
       className={[
         "mx-auto flex min-h-0 w-full flex-1",
+        inkPointerActive ? "select-none ainote-no-select" : "",
         viewerFullscreen
           ? "max-w-none flex-col p-0"
           : "max-w-6xl flex-col gap-3 p-3 md:flex-row md:gap-4 md:p-4",
-      ].join(" ")}
+      ]
+        .filter(Boolean)
+        .join(" ")}
     >
       <aside
         className={[
