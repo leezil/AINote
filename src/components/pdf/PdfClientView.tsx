@@ -10,8 +10,13 @@ pdfjs.GlobalWorkerOptions.workerSrc = `https://unpkg.com/pdfjs-dist@${pdfjs.vers
 
 /**
  * `Page width={displayW}` + `devicePixelRatio`로 선명도 보정(CSS `zoom` 미사용).
+ * 확대는 ZoomPanSurface의 CSS `scale`로 먼저 적용되므로, 여기서는 디바운스된 스케일로만
+ * DPR을 올려 핀치·휠 중 매 프레임 거대 캔버스를 다시 그리는 병목을 줄입니다.
  */
-const SHARPNESS_BOOST = 1.38;
+const SHARPNESS_BOOST = 1.32;
+const MAX_PDF_DPR = 6.5;
+const RASTER_SCALE_SETTLE_MS = 200;
+const RESIZE_DEBOUNCE_MS = 72;
 
 type Props = {
   fileUrl: string;
@@ -57,12 +62,23 @@ export function PdfClientView({
   useEffect(() => {
     const el = containerRef.current;
     if (!el) return;
+    let debounce: ReturnType<typeof setTimeout> | null = null;
+    const scheduleMeasure = () => {
+      if (debounce != null) clearTimeout(debounce);
+      debounce = setTimeout(() => {
+        debounce = null;
+        applyMeasuredWidth();
+      }, RESIZE_DEBOUNCE_MS);
+    };
     const ro = new ResizeObserver(() => {
-      applyMeasuredWidth();
+      scheduleMeasure();
     });
     ro.observe(el);
     applyMeasuredWidth();
-    return () => ro.disconnect();
+    return () => {
+      ro.disconnect();
+      if (debounce != null) clearTimeout(debounce);
+    };
   }, [applyMeasuredWidth, cap, maxWidthPx, wideMode]);
 
   useEffect(() => {
@@ -85,11 +101,27 @@ export function PdfClientView({
 
   const displayW = Math.max(280, containerWidth);
 
+  /** 핀치·휠이 멈춘 뒤에만 반영 — CSS scale로 즉시 확대, 선명도는 잠시 후 맞춤 */
+  const latestScaleRef = useRef(viewportScale);
+  latestScaleRef.current = viewportScale;
+  const [rasterScale, setRasterScale] = useState(viewportScale);
+
+  useEffect(() => {
+    const t = window.setTimeout(() => {
+      setRasterScale(latestScaleRef.current);
+    }, RASTER_SCALE_SETTLE_MS);
+    return () => window.clearTimeout(t);
+  }, [viewportScale]);
+
+  useEffect(() => {
+    setRasterScale(latestScaleRef.current);
+  }, [pageNumber, fileUrl, wideMode]);
+
   const baseDpr =
     typeof window !== "undefined" ? Math.min(window.devicePixelRatio || 1, 3) : 1;
   const pdfDevicePixelRatio = Math.min(
-    14,
-    Math.max(1.45, baseDpr * Math.max(1, viewportScale) * 1.12 * SHARPNESS_BOOST),
+    MAX_PDF_DPR,
+    Math.max(1.45, baseDpr * Math.max(1, rasterScale) * 1.1 * SHARPNESS_BOOST),
   );
 
   const file = useMemo(() => ({ url: fileUrl }), [fileUrl]);
