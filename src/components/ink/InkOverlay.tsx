@@ -30,8 +30,16 @@ type Point = { x: number; y: number };
 
 export type InkTool = "draw" | "erase";
 
+type RemoteInkConfig = {
+  documentId: string;
+  page: number | null;
+  headers: HeadersInit;
+};
+
 type Props = {
   storageKey: string;
+  /** 서버에 필기 동기화(워크스페이스 Blob/로컬 스토어). 없으면 localStorage만 사용 */
+  remoteInk?: RemoteInkConfig | null;
   className?: string;
   strokeColor?: string;
   strokeWidth?: number;
@@ -46,6 +54,8 @@ type Props = {
   allowFingerInk?: boolean;
   /** 손가락 한 손 드래그·두 손 핀치를 뷰 이동·확대와 연결 */
   touchPanBridge?: MutableRefObject<ZoomPanTouchBridge | null> | null;
+  /** 실행 취소·다시 실행 버튼 등을 갱신 */
+  onInkHistoryChange?: () => void;
 };
 
 export type Stroke = {
@@ -57,6 +67,10 @@ export type Stroke = {
 export type InkOverlayHandle = {
   clear: () => void;
   syncLayout: () => void;
+  undo: () => boolean;
+  redo: () => boolean;
+  canUndo: () => boolean;
+  canRedo: () => boolean;
 };
 
 function distance(a: Point, b: Point): number {
@@ -99,6 +113,20 @@ function eraseStrokesAt(strokes: Stroke[], px: number, py: number, eraserR: numb
   return strokes.filter((s) => !strokeHitByEraser(s, px, py, eraserR));
 }
 
+const MAX_INK_UNDO = 64;
+
+function cloneStrokes(s: Stroke[]): Stroke[] {
+  return s.map((st) => ({
+    color: st.color,
+    width: st.width,
+    points: st.points.map((p) => ({ x: p.x, y: p.y })),
+  }));
+}
+
+function trimStack<T>(arr: T[], max: number) {
+  while (arr.length > max) arr.shift();
+}
+
 function coalescedClientPoints(
   e: React.PointerEvent<HTMLCanvasElement>,
 ): ReadonlyArray<{ clientX: number; clientY: number }> {
@@ -113,6 +141,7 @@ function coalescedClientPoints(
 export const InkOverlay = forwardRef<InkOverlayHandle, Props>(function InkOverlay(
   {
     storageKey,
+    remoteInk = null,
     className,
     strokeColor = "#2563eb",
     strokeWidth = 2.4,
@@ -121,6 +150,7 @@ export const InkOverlay = forwardRef<InkOverlayHandle, Props>(function InkOverla
     viewportScale = 1,
     allowFingerInk = false,
     touchPanBridge = null,
+    onInkHistoryChange,
   },
   ref,
 ) {
@@ -141,6 +171,19 @@ export const InkOverlay = forwardRef<InkOverlayHandle, Props>(function InkOverla
   const roRafRef = useRef<number | null>(null);
   const moveDebugUntilRef = useRef(0);
   const ignoredEndLogUntilRef = useRef(0);
+  const remoteInkRef = useRef(remoteInk);
+  remoteInkRef.current = remoteInk;
+  const remoteSaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const inkLoadGenRef = useRef(0);
+  const undoStackRef = useRef<Stroke[][]>([]);
+  const redoStackRef = useRef<Stroke[][]>([]);
+  const eraseGestureUndoPushedRef = useRef(false);
+  const onInkHistoryChangeRef = useRef(onInkHistoryChange);
+  onInkHistoryChangeRef.current = onInkHistoryChange;
+
+  const notifyInkHistory = useCallback(() => {
+    onInkHistoryChangeRef.current?.();
+  }, []);
 
   const redraw = useCallback(() => {
     const canvas = canvasRef.current;
@@ -206,29 +249,154 @@ export const InkOverlay = forwardRef<InkOverlayHandle, Props>(function InkOverla
     }
   }, [tool, eraserRadius]);
 
+  const putInkRemote = useCallback((remote: RemoteInkConfig, strokes: Stroke[]) => {
+    const q = remote.page != null ? `?page=${remote.page}` : "";
+    const body =
+      remote.page != null
+        ? JSON.stringify({ page: remote.page, strokes })
+        : JSON.stringify({ strokes });
+    return fetch(`/api/documents/${remote.documentId}/ink${q}`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json", ...remote.headers },
+      body,
+    });
+  }, []);
+
   const persist = useCallback(() => {
     try {
       localStorage.setItem(storageKey, JSON.stringify(strokesRef.current));
     } catch {
       // ignore quota
     }
-  }, [storageKey]);
+    const remote = remoteInkRef.current;
+    if (!remote) return;
+    if (remoteSaveTimerRef.current != null) {
+      clearTimeout(remoteSaveTimerRef.current);
+    }
+    remoteSaveTimerRef.current = setTimeout(() => {
+      remoteSaveTimerRef.current = null;
+      void putInkRemote(remote, strokesRef.current).catch(() => {});
+    }, 650);
+  }, [storageKey, putInkRemote]);
+
+  const pushUndoSnapshot = useCallback(
+    (snapshot: Stroke[]) => {
+      undoStackRef.current.push(snapshot);
+      trimStack(undoStackRef.current, MAX_INK_UNDO);
+      redoStackRef.current.length = 0;
+      notifyInkHistory();
+    },
+    [notifyInkHistory],
+  );
+
+  const applyUndo = useCallback(() => {
+    if (undoStackRef.current.length === 0) return false;
+    redoStackRef.current.push(cloneStrokes(strokesRef.current));
+    trimStack(redoStackRef.current, MAX_INK_UNDO);
+    strokesRef.current = cloneStrokes(undoStackRef.current.pop()!);
+    persist();
+    redraw();
+    bump((n) => n + 1);
+    notifyInkHistory();
+    return true;
+  }, [persist, redraw, notifyInkHistory]);
+
+  const applyRedo = useCallback(() => {
+    if (redoStackRef.current.length === 0) return false;
+    undoStackRef.current.push(cloneStrokes(strokesRef.current));
+    trimStack(undoStackRef.current, MAX_INK_UNDO);
+    strokesRef.current = cloneStrokes(redoStackRef.current.pop()!);
+    persist();
+    redraw();
+    bump((n) => n + 1);
+    notifyInkHistory();
+    return true;
+  }, [persist, redraw, notifyInkHistory]);
 
   useEffect(() => {
-    try {
-      const raw = localStorage.getItem(storageKey);
-      if (raw) {
-        const parsed = JSON.parse(raw) as Stroke[];
-        if (Array.isArray(parsed)) {
-          strokesRef.current = parsed;
-          bump((n) => n + 1);
-          queueMicrotask(redraw);
+    const remote = remoteInk ?? null;
+    const gen = ++inkLoadGenRef.current;
+    currentRef.current = null;
+    activeDrawPointerId.current = null;
+    activeTouchPanId.current = null;
+    touchCoordsRef.current.clear();
+    pinchTouchActive.current = false;
+    eraserHoverRef.current = null;
+    strokesRef.current = [];
+    undoStackRef.current = [];
+    redoStackRef.current = [];
+    eraseGestureUndoPushedRef.current = false;
+    notifyInkHistory();
+
+    const applyLocalFallback = () => {
+      try {
+        const raw = localStorage.getItem(storageKey);
+        if (raw) {
+          const parsed = JSON.parse(raw) as Stroke[];
+          if (Array.isArray(parsed)) strokesRef.current = parsed;
         }
+      } catch {
+        strokesRef.current = [];
       }
-    } catch {
-      // ignore
+    };
+
+    if (!remote) {
+      applyLocalFallback();
+      bump((n) => n + 1);
+      queueMicrotask(redraw);
+      notifyInkHistory();
+      return () => {
+        if (remoteSaveTimerRef.current != null) {
+          clearTimeout(remoteSaveTimerRef.current);
+          remoteSaveTimerRef.current = null;
+        }
+      };
     }
-  }, [storageKey, redraw]);
+
+    let cancelled = false;
+    const q = remote.page != null ? `?page=${remote.page}` : "";
+    void (async () => {
+      try {
+        const res = await fetch(`/api/documents/${remote.documentId}/ink${q}`, {
+          headers: remote.headers,
+          cache: "no-store",
+        });
+        if (cancelled || gen !== inkLoadGenRef.current) return;
+        if (res.ok) {
+          const data = (await res.json()) as { strokes?: unknown };
+          const arr = data.strokes;
+          if (Array.isArray(arr)) {
+            strokesRef.current = arr as Stroke[];
+            try {
+              localStorage.setItem(storageKey, JSON.stringify(strokesRef.current));
+            } catch {
+              // ignore
+            }
+            bump((n) => n + 1);
+            queueMicrotask(redraw);
+            notifyInkHistory();
+            return;
+          }
+        }
+      } catch {
+        // fall through
+      }
+      if (cancelled || gen !== inkLoadGenRef.current) return;
+      applyLocalFallback();
+      bump((n) => n + 1);
+      queueMicrotask(redraw);
+      notifyInkHistory();
+    })();
+
+    return () => {
+      cancelled = true;
+      if (remoteSaveTimerRef.current != null) {
+        clearTimeout(remoteSaveTimerRef.current);
+        remoteSaveTimerRef.current = null;
+      }
+      void putInkRemote(remote, strokesRef.current).catch(() => {});
+    };
+  }, [storageKey, redraw, remoteInk, putInkRemote, notifyInkHistory]);
 
   const resizeToContainer = useCallback(() => {
     const canvas = canvasRef.current;
@@ -312,6 +480,7 @@ export const InkOverlay = forwardRef<InkOverlayHandle, Props>(function InkOverla
     activeTouchPanId.current = null;
     touchCoordsRef.current.clear();
     pinchTouchActive.current = false;
+    eraseGestureUndoPushedRef.current = false;
     if (tool !== "erase") eraserHoverRef.current = null;
     redraw();
   }, [tool, redraw]);
@@ -320,6 +489,9 @@ export const InkOverlay = forwardRef<InkOverlayHandle, Props>(function InkOverla
     ref,
     () => ({
       clear: () => {
+        if (strokesRef.current.length > 0) {
+          pushUndoSnapshot(cloneStrokes(strokesRef.current));
+        }
         strokesRef.current = [];
         currentRef.current = null;
         activeDrawPointerId.current = null;
@@ -327,7 +499,20 @@ export const InkOverlay = forwardRef<InkOverlayHandle, Props>(function InkOverla
         touchCoordsRef.current.clear();
         pinchTouchActive.current = false;
         eraserHoverRef.current = null;
-        persist();
+        eraseGestureUndoPushedRef.current = false;
+        if (remoteSaveTimerRef.current != null) {
+          clearTimeout(remoteSaveTimerRef.current);
+          remoteSaveTimerRef.current = null;
+        }
+        try {
+          localStorage.setItem(storageKey, JSON.stringify(strokesRef.current));
+        } catch {
+          // ignore
+        }
+        const r = remoteInkRef.current;
+        if (r) {
+          void putInkRemote(r, []).catch(() => {});
+        }
         redraw();
         bump((n) => n + 1);
       },
@@ -336,8 +521,12 @@ export const InkOverlay = forwardRef<InkOverlayHandle, Props>(function InkOverla
         resizeToContainer();
         bump((n) => n + 1);
       },
+      undo: () => applyUndo(),
+      redo: () => applyRedo(),
+      canUndo: () => undoStackRef.current.length > 0,
+      canRedo: () => redoStackRef.current.length > 0,
     }),
-    [persist, redraw, resizeToContainer],
+    [persist, redraw, resizeToContainer, putInkRemote, storageKey, pushUndoSnapshot, applyUndo, applyRedo],
   );
 
   const clientPointFromClient = useCallback((clientX: number, clientY: number): Point => {
@@ -377,10 +566,16 @@ export const InkOverlay = forwardRef<InkOverlayHandle, Props>(function InkOverla
 
         if (tool === "erase") {
           currentRef.current = null;
+          eraseGestureUndoPushedRef.current = false;
           const p = clientPointFromClient(e.clientX, e.clientY);
           eraserHoverRef.current = p;
+          const before = cloneStrokes(strokesRef.current);
           const next = eraseStrokesAt(strokesRef.current, p.x, p.y, eraserRadius);
           if (next.length !== strokesRef.current.length) {
+            if (!eraseGestureUndoPushedRef.current) {
+              pushUndoSnapshot(before);
+              eraseGestureUndoPushedRef.current = true;
+            }
             strokesRef.current = next;
             persist();
             bump((n) => n + 1);
@@ -498,7 +693,7 @@ export const InkOverlay = forwardRef<InkOverlayHandle, Props>(function InkOverla
       }
       beginDrawOrErase();
     },
-    [allowFingerInk, touchPanBridge, tool, strokeColor, strokeWidth, eraserRadius, clientPointFromClient, persist, redraw],
+    [allowFingerInk, touchPanBridge, tool, strokeColor, strokeWidth, eraserRadius, clientPointFromClient, persist, redraw, pushUndoSnapshot],
   );
 
   const onPointerMove = useCallback(
@@ -560,8 +755,13 @@ export const InkOverlay = forwardRef<InkOverlayHandle, Props>(function InkOverla
         let changed = false;
         for (const ev of list) {
           const p = clientPointFromClient(ev.clientX, ev.clientY);
+          const before = cloneStrokes(strokesRef.current);
           const next = eraseStrokesAt(strokesRef.current, p.x, p.y, eraserRadius);
           if (next.length !== strokesRef.current.length) {
+            if (!eraseGestureUndoPushedRef.current) {
+              pushUndoSnapshot(before);
+              eraseGestureUndoPushedRef.current = true;
+            }
             strokesRef.current = next;
             changed = true;
           }
@@ -585,7 +785,7 @@ export const InkOverlay = forwardRef<InkOverlayHandle, Props>(function InkOverla
       }
       redraw();
     },
-    [allowFingerInk, touchPanBridge, tool, strokeWidth, eraserRadius, clientPointFromClient, persist, redraw],
+    [allowFingerInk, touchPanBridge, tool, strokeWidth, eraserRadius, clientPointFromClient, persist, redraw, pushUndoSnapshot],
   );
 
   const endStroke = useCallback(
@@ -646,6 +846,7 @@ export const InkOverlay = forwardRef<InkOverlayHandle, Props>(function InkOverla
       }
 
       if (tool === "erase") {
+        eraseGestureUndoPushedRef.current = false;
         try {
           e.currentTarget.releasePointerCapture(e.pointerId);
         } catch {
@@ -656,6 +857,7 @@ export const InkOverlay = forwardRef<InkOverlayHandle, Props>(function InkOverla
       }
 
       if (currentRef.current && currentRef.current.points.length >= 1) {
+        pushUndoSnapshot(cloneStrokes(strokesRef.current));
         strokesRef.current.push(currentRef.current);
         persist();
       }
@@ -668,7 +870,7 @@ export const InkOverlay = forwardRef<InkOverlayHandle, Props>(function InkOverla
         // ignore
       }
     },
-    [allowFingerInk, touchPanBridge, tool, persist, redraw],
+    [allowFingerInk, touchPanBridge, tool, persist, redraw, pushUndoSnapshot],
   );
 
   const onPointerLeave = useCallback(() => {
@@ -679,7 +881,7 @@ export const InkOverlay = forwardRef<InkOverlayHandle, Props>(function InkOverla
   return (
     <canvas
       ref={canvasRef}
-      className={className}
+      className={[className, "select-none"].filter(Boolean).join(" ") || undefined}
       style={{ touchAction: "none" }}
       onPointerDown={onPointerDown}
       onPointerMove={onPointerMove}

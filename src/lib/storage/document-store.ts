@@ -36,6 +36,18 @@ function sanitizeWorkspaceId(workspaceId: string): string {
   return safe.length > 0 ? safe : "local";
 }
 
+/** 로컬 디스크·Vercel Blob 공통 필기 JSON 파일명 */
+function inkStorageFilename(meta: StoredDocumentMeta, page?: number): string {
+  if (meta.kind === "pdf") {
+    const p =
+      typeof page === "number" && Number.isFinite(page) && page >= 1
+        ? Math.floor(page)
+        : 1;
+    return `p-${p}.json`;
+  }
+  return "default.json";
+}
+
 export class DocumentStore {
   constructor(private readonly workspaceId: string) {}
 
@@ -53,6 +65,39 @@ export class DocumentStore {
 
   private filePath(documentId: string): string {
     return path.join(this.filesDir(), documentId);
+  }
+
+  private inkDirForDocument(documentId: string): string {
+    return path.join(this.rootDir(), "ink", documentId);
+  }
+
+  async readInk(documentId: string, page?: number): Promise<string | null> {
+    await this.ensureReady();
+    const meta = await this.getMeta(documentId);
+    if (!meta) return null;
+    const rel = inkStorageFilename(meta, page);
+    const p = path.join(this.inkDirForDocument(documentId), rel);
+    try {
+      return await fs.readFile(p, "utf8");
+    } catch {
+      return null;
+    }
+  }
+
+  async writeInk(
+    documentId: string,
+    page: number | undefined,
+    utf8: string,
+  ): Promise<void> {
+    await this.ensureReady();
+    const meta = await this.getMeta(documentId);
+    if (!meta) {
+      throw new Error("AINOTE_DOC_NOT_FOUND");
+    }
+    const dir = this.inkDirForDocument(documentId);
+    await fs.mkdir(dir, { recursive: true });
+    const rel = inkStorageFilename(meta, meta.kind === "pdf" ? page : undefined);
+    await fs.writeFile(path.join(dir, rel), utf8, "utf8");
   }
 
   private async readManifest(): Promise<Manifest> {
@@ -139,6 +184,11 @@ export class DocumentStore {
     } catch {
       // ignore
     }
+    try {
+      await fs.rm(this.inkDirForDocument(documentId), { recursive: true, force: true });
+    } catch {
+      // ignore
+    }
     const manifest = await this.readManifest();
     manifest.documents = manifest.documents.filter((d) => d.id !== documentId);
     await this.writeManifest(manifest);
@@ -154,6 +204,11 @@ export class DocumentStore {
       } catch {
         // ignore
       }
+    }
+    try {
+      await fs.rm(path.join(this.rootDir(), "ink"), { recursive: true, force: true });
+    } catch {
+      // ignore
     }
     await this.writeManifest({ documents: [], aiAskCount: 0 });
   }
@@ -204,6 +259,74 @@ export class BlobDocumentStore {
 
   private filePathname(documentId: string): string {
     return `${this.prefix()}/files/${documentId}`;
+  }
+
+  private inkPathname(documentId: string, meta: StoredDocumentMeta, page?: number): string {
+    return `${this.prefix()}/ink/${documentId}/${inkStorageFilename(meta, page)}`;
+  }
+
+  private async deleteAllBlobsWithPrefix(prefix: string): Promise<void> {
+    let cursor: string | undefined;
+    for (;;) {
+      const res = await list({
+        prefix,
+        limit: 1000,
+        token: this.token(),
+        cursor,
+      });
+      for (const b of res.blobs) {
+        try {
+          await del(b.url, { token: this.token() });
+        } catch {
+          // ignore
+        }
+      }
+      if (!res.hasMore) break;
+      cursor = res.cursor;
+      if (!cursor) break;
+    }
+  }
+
+  async readInk(documentId: string, page?: number): Promise<string | null> {
+    const meta = await this.getMeta(documentId);
+    if (!meta) return null;
+    const pathname = this.inkPathname(
+      documentId,
+      meta,
+      meta.kind === "pdf" ? page : undefined,
+    );
+    const { blobs } = await list({
+      prefix: pathname,
+      limit: 10,
+      token: this.token(),
+    });
+    const hit = blobs.find((b) => b.pathname === pathname);
+    if (!hit) return null;
+    const buf = await this.readBlobUrlBytes(hit.url);
+    return buf?.toString("utf8") ?? null;
+  }
+
+  async writeInk(
+    documentId: string,
+    page: number | undefined,
+    utf8: string,
+  ): Promise<void> {
+    const meta = await this.getMeta(documentId);
+    if (!meta) {
+      throw new Error("AINOTE_DOC_NOT_FOUND");
+    }
+    const pathname = this.inkPathname(
+      documentId,
+      meta,
+      meta.kind === "pdf" ? page : undefined,
+    );
+    await put(pathname, utf8, {
+      access: this.blobPutAccess(),
+      addRandomSuffix: false,
+      allowOverwrite: true,
+      contentType: "application/json; charset=utf-8",
+      token: this.token(),
+    });
   }
 
   /**
@@ -315,6 +438,7 @@ export class BlobDocumentStore {
   }
 
   async deleteDocument(documentId: string): Promise<void> {
+    await this.deleteAllBlobsWithPrefix(`${this.prefix()}/ink/${documentId}/`);
     const meta = await this.getMeta(documentId);
     if (meta?.blobUrl) {
       try {
@@ -339,6 +463,7 @@ export class BlobDocumentStore {
         }
       }
     }
+    await this.deleteAllBlobsWithPrefix(`${this.prefix()}/ink/`);
     await this.writeManifest({ documents: [], aiAskCount: 0 });
   }
 

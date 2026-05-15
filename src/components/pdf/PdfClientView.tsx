@@ -95,7 +95,10 @@ export function PdfClientView({
   const file = useMemo(() => ({ url: fileUrl }), [fileUrl]);
 
   return (
-    <div ref={containerRef} className="flex w-full justify-center bg-zinc-100/80 dark:bg-zinc-900/60">
+    <div
+      ref={containerRef}
+      className="ainote-no-select flex w-full justify-center bg-zinc-100/80 dark:bg-zinc-900/60"
+    >
       <div
         className="relative mx-auto flex justify-center overflow-hidden"
         style={{
@@ -104,7 +107,7 @@ export function PdfClientView({
           minHeight: wideMode ? 0 : 360,
         }}
       >
-        <div className="relative flex w-full justify-center">
+        <div className="ainote-no-select relative flex w-full justify-center">
           <Document
             key={fileUrl}
             file={file}

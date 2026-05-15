@@ -56,6 +56,7 @@ export function WorkspaceApp() {
   const [pdfNumPagesByDoc, setPdfNumPagesByDoc] = useState<Record<string, number>>({});
   const captureRef = useRef<HTMLDivElement | null>(null);
   const inkRef = useRef<InkOverlayHandle | null>(null);
+  const [inkHistoryEpoch, setInkHistoryEpoch] = useState(0);
 
   const [question, setQuestion] = useState("");
   const [pdfAskMode, setPdfAskMode] = useState<PdfAskMode>("auto_material");
@@ -562,9 +563,51 @@ export function WorkspaceApp() {
     ? `/api/documents/${activeMeta.id}/file`
     : "";
 
-  const inkStorageKey = activeMeta
-    ? `ainote:ink:${defaultWorkspaceId}:${activeMeta.id}`
-    : "ainote:ink:none";
+  const inkStorageKey = useMemo(() => {
+    if (!activeMeta) return "ainote:ink:none";
+    if (activeMeta.kind === "pdf") {
+      return `ainote:ink:${defaultWorkspaceId}:${activeMeta.id}:p${currentPage}`;
+    }
+    return `ainote:ink:${defaultWorkspaceId}:${activeMeta.id}`;
+  }, [activeMeta, currentPage, defaultWorkspaceId]);
+
+  const inkRemote = useMemo(() => {
+    if (!activeMeta) return null;
+    return {
+      documentId: activeMeta.id,
+      page: activeMeta.kind === "pdf" ? currentPage : null,
+      headers: workspaceHeaders,
+    };
+  }, [activeMeta, currentPage, workspaceHeaders]);
+
+  const bumpInkHistory = useCallback(() => setInkHistoryEpoch((n) => n + 1), []);
+
+  void inkHistoryEpoch;
+  const canInkUndo = inkRef.current?.canUndo?.() ?? false;
+  const canInkRedo = inkRef.current?.canRedo?.() ?? false;
+
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (!activeId || !gestureInk || !inkLayerActive) return;
+      const target = e.target as HTMLElement | null;
+      if (target?.closest('textarea, input, select, [contenteditable="true"]')) return;
+
+      const mod = e.metaKey || e.ctrlKey;
+      if (!mod) return;
+
+      if (e.key === "z" || e.key === "Z") {
+        if (e.shiftKey) {
+          if (inkRef.current?.redo?.()) e.preventDefault();
+        } else if (inkRef.current?.undo?.()) {
+          e.preventDefault();
+        }
+      } else if (e.key === "y" || e.key === "Y") {
+        if (inkRef.current?.redo?.()) e.preventDefault();
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [activeId, gestureInk, inkLayerActive]);
 
   return (
     <div
@@ -784,6 +827,28 @@ export function WorkspaceApp() {
                   ) : null}
                 </span>
               ) : null}
+              {inkLayerActive ? (
+                <>
+                  <button
+                    type="button"
+                    className="rounded-md border border-zinc-200 px-2 py-1 text-sm disabled:opacity-40 dark:border-zinc-700"
+                    disabled={!canInkUndo}
+                    onClick={() => inkRef.current?.undo()}
+                    title={t("workspace.inkUndo")}
+                  >
+                    {t("workspace.inkUndo")}
+                  </button>
+                  <button
+                    type="button"
+                    className="rounded-md border border-zinc-200 px-2 py-1 text-sm disabled:opacity-40 dark:border-zinc-700"
+                    disabled={!canInkRedo}
+                    onClick={() => inkRef.current?.redo()}
+                    title={t("workspace.inkRedo")}
+                  >
+                    {t("workspace.inkRedo")}
+                  </button>
+                </>
+              ) : null}
               <button
                 type="button"
                 className="rounded-md border border-zinc-200 px-2 py-1 text-sm dark:border-zinc-700"
@@ -866,10 +931,13 @@ export function WorkspaceApp() {
                   data-zoom-document-surface
                   className={[
                     "relative isolate mx-auto max-w-full",
+                    activeMeta.kind === "pdf" ? "ainote-no-select" : "",
                     viewerFullscreen
                       ? "flex min-h-0 w-max max-w-full max-h-full flex-col"
                       : "min-h-[480px] w-max",
-                  ].join(" ")}
+                  ]
+                    .filter(Boolean)
+                    .join(" ")}
                 >
                   {activeMeta.kind === "pdf" ? (
                     <div
@@ -941,8 +1009,11 @@ export function WorkspaceApp() {
                     </div>
                   )}
                   <InkOverlay
+                    key={inkStorageKey}
                     ref={inkRef}
                     storageKey={inkStorageKey}
+                    remoteInk={inkRemote}
+                    onInkHistoryChange={bumpInkHistory}
                     allowFingerInk={allowFingerInk}
                     touchPanBridge={touchPanBridgeRef}
                     tool={penTool === "erase" ? "erase" : "draw"}

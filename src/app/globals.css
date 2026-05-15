@@ -24,3 +24,11 @@ body {
   color: var(--foreground);
   font-family: Arial, Helvetica, sans-serif;
 }
+
+/* PDF 뷰: iPad 등에서 캔버스·레이아웃이 선택(하이라이트)되는 것 방지 */
+.ainote-no-select,
+.ainote-no-select * {
+  -webkit-user-select: none !important;
+  user-select: none !important;
+  -webkit-touch-callout: none !important;
+}
