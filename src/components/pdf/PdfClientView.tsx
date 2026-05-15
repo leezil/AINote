@@ -29,7 +29,7 @@ type Props = {
   wideMode?: boolean;
   viewportScale?: number;
   onPdfLoaded?: (numPages: number) => void;
-  /** `displayW` 페이지 영역과 동일한 박스에 두어 필기 좌표·스케일을 PDF와 맞춤 */
+  /** PDF 페이지와 동일한 `zoom`·`renderWidth` 좌표계에 겹침 */
   inkOverlay?: ReactNode;
   /** true면 PDF 캔버스가 포인터를 가로채지 않음(필기 모드) */
   inkPointerPassthrough?: boolean;
@@ -122,12 +122,7 @@ export function PdfClientView({
         }}
       >
         <div
-          className={[
-            "flex justify-center",
-            inkPointerPassthrough ? "pointer-events-none [&_*]:pointer-events-none" : "",
-          ]
-            .filter(Boolean)
-            .join(" ")}
+          className="relative flex justify-center"
           style={
             {
               width: renderWidth,
@@ -135,34 +130,38 @@ export function PdfClientView({
             } as CSSProperties
           }
         >
-          <Document
-            key={fileUrl}
-            file={file}
-            onLoadSuccess={(pdf) => {
-              onPdfLoaded?.(pdf.numPages);
-            }}
-            loading={
-              <p className="min-h-[36vh] p-8 text-center text-sm text-zinc-500 md:min-h-[320px]">
-                {t("pdf.loading")}
-              </p>
+          <div
+            className={
+              inkPointerPassthrough ? "pointer-events-none [&_*]:pointer-events-none" : undefined
             }
-            error={<p className="p-4 text-sm text-red-600">{t("pdf.error")}</p>}
           >
-            <Page
-              key={pageNumber}
-              pageNumber={pageNumber}
-              width={renderWidth}
-              devicePixelRatio={pdfDevicePixelRatio}
-              renderTextLayer={false}
-              renderAnnotationLayer={false}
-            />
-          </Document>
-        </div>
-        {inkOverlay ? (
-          <div className="pointer-events-none absolute inset-0 z-10 overflow-hidden">
-            <div className="relative h-full w-full">{inkOverlay}</div>
+            <Document
+              key={fileUrl}
+              file={file}
+              onLoadSuccess={(pdf) => {
+                onPdfLoaded?.(pdf.numPages);
+              }}
+              loading={
+                <p className="min-h-[36vh] p-8 text-center text-sm text-zinc-500 md:min-h-[320px]">
+                  {t("pdf.loading")}
+                </p>
+              }
+              error={<p className="p-4 text-sm text-red-600">{t("pdf.error")}</p>}
+            >
+              <Page
+                key={pageNumber}
+                pageNumber={pageNumber}
+                width={renderWidth}
+                devicePixelRatio={pdfDevicePixelRatio}
+                renderTextLayer={false}
+                renderAnnotationLayer={false}
+              />
+            </Document>
           </div>
-        ) : null}
+          {inkOverlay ? (
+            <div className="pointer-events-none absolute inset-0 z-10">{inkOverlay}</div>
+          ) : null}
+        </div>
       </div>
     </div>
   );
