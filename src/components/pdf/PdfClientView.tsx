@@ -7,7 +7,6 @@ import {
   useMemo,
   useRef,
   useState,
-  type CSSProperties,
   type ReactNode,
 } from "react";
 import { Document, Page, pdfjs } from "react-pdf";
@@ -17,10 +16,11 @@ import "react-pdf/dist/Page/TextLayer.css";
 pdfjs.GlobalWorkerOptions.workerSrc = `https://unpkg.com/pdfjs-dist@${pdfjs.version}/build/pdf.worker.min.mjs`;
 
 /**
- * 표시 너비(`displayW`)보다 큰 width로 PDF를 렌더한 뒤 `zoom`으로 맞춤.
- * (픽셀 밀도 + 축소 표시로 첫 화면부터 덜 깨짐)
+ * 예전에는 `renderWidth` 오버샘플 + CSS `zoom`으로 선명도를 올렸으나,
+ * `zoom`이 레이아웃/히트박스/`getBoundingClientRect()`와 어긋나 필기 좌표가 깨질 수 있음.
+ * 이제는 `Page width={displayW}`만 쓰고, 선명도는 `devicePixelRatio`로 보정.
  */
-const WIDTH_OVERSAMPLE = 1.82;
+const SHARPNESS_BOOST = 1.38;
 
 type Props = {
   fileUrl: string;
@@ -29,7 +29,7 @@ type Props = {
   wideMode?: boolean;
   viewportScale?: number;
   onPdfLoaded?: (numPages: number) => void;
-  /** PDF 페이지와 동일한 `zoom`·`renderWidth` 좌표계에 겹침 */
+  /** PDF 페이지 박스(`displayW`)와 동일 좌표계에 겹침 — CSS `zoom` 없음 */
   inkOverlay?: ReactNode;
   /** true면 PDF 캔버스가 포인터를 가로채지 않음(필기 모드) */
   inkPointerPassthrough?: boolean;
@@ -99,14 +99,12 @@ export function PdfClientView({
   }, [applyMeasuredWidth, pageNumber, wideMode, fileUrl]);
 
   const displayW = Math.max(280, containerWidth);
-  const renderWidth = Math.round(Math.min(cap, displayW * WIDTH_OVERSAMPLE));
-  const fitZoom = renderWidth > 0 ? displayW / renderWidth : 1;
 
   const baseDpr =
     typeof window !== "undefined" ? Math.min(window.devicePixelRatio || 1, 3) : 1;
   const pdfDevicePixelRatio = Math.min(
     14,
-    Math.max(1.45, baseDpr * Math.max(1, viewportScale) * 1.12),
+    Math.max(1.45, baseDpr * Math.max(1, viewportScale) * 1.12 * SHARPNESS_BOOST),
   );
 
   const file = useMemo(() => ({ url: fileUrl }), [fileUrl]);
@@ -121,15 +119,7 @@ export function PdfClientView({
           minHeight: wideMode ? 0 : 360,
         }}
       >
-        <div
-          className="relative flex justify-center"
-          style={
-            {
-              width: renderWidth,
-              zoom: fitZoom,
-            } as CSSProperties
-          }
-        >
+        <div className="relative flex w-full justify-center">
           <div
             className={
               inkPointerPassthrough ? "pointer-events-none [&_*]:pointer-events-none" : undefined
@@ -151,7 +141,7 @@ export function PdfClientView({
               <Page
                 key={pageNumber}
                 pageNumber={pageNumber}
-                width={renderWidth}
+                width={displayW}
                 devicePixelRatio={pdfDevicePixelRatio}
                 renderTextLayer={false}
                 renderAnnotationLayer={false}
