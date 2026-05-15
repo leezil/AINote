@@ -1,7 +1,15 @@
 "use client";
 
 import { useI18n } from "@/lib/i18n/LocaleProvider";
-import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type CSSProperties,
+  type ReactNode,
+} from "react";
 import { Document, Page, pdfjs } from "react-pdf";
 import "react-pdf/dist/Page/AnnotationLayer.css";
 import "react-pdf/dist/Page/TextLayer.css";
@@ -21,6 +29,10 @@ type Props = {
   wideMode?: boolean;
   viewportScale?: number;
   onPdfLoaded?: (numPages: number) => void;
+  /** `displayW` 페이지 영역과 동일한 박스에 두어 필기 좌표·스케일을 PDF와 맞춤 */
+  inkOverlay?: ReactNode;
+  /** true면 PDF 캔버스가 포인터를 가로채지 않음(필기 모드) */
+  inkPointerPassthrough?: boolean;
 };
 
 export function PdfClientView({
@@ -30,6 +42,8 @@ export function PdfClientView({
   wideMode = false,
   viewportScale = 1,
   onPdfLoaded,
+  inkOverlay,
+  inkPointerPassthrough = false,
 }: Props) {
   const { t } = useI18n();
   const containerRef = useRef<HTMLDivElement | null>(null);
@@ -100,7 +114,7 @@ export function PdfClientView({
   return (
     <div ref={containerRef} className="flex w-full justify-center bg-zinc-100/80 dark:bg-zinc-900/60">
       <div
-        className="mx-auto flex justify-center overflow-hidden"
+        className="relative mx-auto flex justify-center overflow-hidden"
         style={{
           width: displayW,
           maxWidth: "100%",
@@ -108,7 +122,12 @@ export function PdfClientView({
         }}
       >
         <div
-          className="flex justify-center"
+          className={[
+            "flex justify-center",
+            inkPointerPassthrough ? "pointer-events-none [&_*]:pointer-events-none" : "",
+          ]
+            .filter(Boolean)
+            .join(" ")}
           style={
             {
               width: renderWidth,
@@ -139,6 +158,11 @@ export function PdfClientView({
             />
           </Document>
         </div>
+        {inkOverlay ? (
+          <div className="pointer-events-none absolute inset-0 z-10 overflow-hidden">
+            <div className="relative h-full w-full">{inkOverlay}</div>
+          </div>
+        ) : null}
       </div>
     </div>
   );
