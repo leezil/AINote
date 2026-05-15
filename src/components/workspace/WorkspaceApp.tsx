@@ -879,43 +879,33 @@ export function WorkspaceApp() {
                           : "relative z-0"
                       }
                     >
-                      <PdfClientView
-                        key={activeMeta.id}
-                        fileUrl={fileUrl}
-                        pageNumber={currentPage}
-                        maxWidthPx={viewerFullscreen ? 8192 : 1280}
-                        wideMode={viewerFullscreen}
-                        viewportScale={viewportPdfScale}
-                        inkPointerPassthrough={inkPointerActive}
-                        inkOverlay={
-                          <InkOverlay
-                            ref={inkRef}
-                            storageKey={inkStorageKey}
-                            allowFingerInk={allowFingerInk}
-                            touchPanBridge={touchPanBridgeRef}
-                            tool={penTool === "erase" ? "erase" : "draw"}
-                            strokeColor={inkColor}
-                            strokeWidth={inkWidth}
-                            eraserRadius={eraserRadius}
-                            viewportScale={viewportPdfScale}
-                            className={[
-                              "absolute inset-0 z-[50]",
-                              inkPointerActive ? "pointer-events-auto" : "pointer-events-none",
-                            ].join(" ")}
-                          />
+                      <div
+                        className={
+                          inkPointerActive
+                            ? "pointer-events-none [&_*]:pointer-events-none"
+                            : undefined
                         }
-                        onPdfLoaded={(n) => {
-                          setPdfNumPagesByDoc((prev) => ({
-                            ...prev,
-                            [activeMeta.id]: n,
-                          }));
-                          setPageByDoc((prev) => {
-                            const cur = prev[activeMeta.id] ?? 1;
-                            if (cur <= n) return prev;
-                            return { ...prev, [activeMeta.id]: n };
-                          });
-                        }}
-                      />
+                      >
+                        <PdfClientView
+                          key={activeMeta.id}
+                          fileUrl={fileUrl}
+                          pageNumber={currentPage}
+                          maxWidthPx={viewerFullscreen ? 8192 : 1280}
+                          wideMode={viewerFullscreen}
+                          viewportScale={viewportPdfScale}
+                          onPdfLoaded={(n) => {
+                            setPdfNumPagesByDoc((prev) => ({
+                              ...prev,
+                              [activeMeta.id]: n,
+                            }));
+                            setPageByDoc((prev) => {
+                              const cur = prev[activeMeta.id] ?? 1;
+                              if (cur <= n) return prev;
+                              return { ...prev, [activeMeta.id]: n };
+                            });
+                          }}
+                        />
+                      </div>
                     </div>
                   ) : activeMeta.kind === "image" ? (
                     <div
@@ -924,35 +914,18 @@ export function WorkspaceApp() {
                         viewerFullscreen && inkLayerActive ? "max-h-full min-h-0 overflow-auto" : "",
                       ].join(" ")}
                     >
-                      <div className="relative z-[1] mx-auto w-fit max-w-full">
-                        <div
-                          className={
-                            inkPointerActive
-                              ? "pointer-events-none [&_*]:pointer-events-none"
-                              : undefined
-                          }
-                        >
-                          <WorkspaceDocImage
-                            fileUrl={fileUrl}
-                            fetchHeaders={workspaceHeaders}
-                            alt={activeMeta.filename}
-                            className="max-h-[85vh] w-auto max-w-none object-contain md:max-h-[90vh]"
-                          />
-                        </div>
-                        <InkOverlay
-                          ref={inkRef}
-                          storageKey={inkStorageKey}
-                          allowFingerInk={allowFingerInk}
-                          touchPanBridge={touchPanBridgeRef}
-                          tool={penTool === "erase" ? "erase" : "draw"}
-                          strokeColor={inkColor}
-                          strokeWidth={inkWidth}
-                          eraserRadius={eraserRadius}
-                          viewportScale={viewportPdfScale}
-                          className={[
-                            "absolute inset-0 z-[50]",
-                            inkPointerActive ? "pointer-events-auto" : "pointer-events-none",
-                          ].join(" ")}
+                      <div
+                        className={
+                          inkPointerActive
+                            ? "pointer-events-none [&_*]:pointer-events-none"
+                            : undefined
+                        }
+                      >
+                        <WorkspaceDocImage
+                          fileUrl={fileUrl}
+                          fetchHeaders={workspaceHeaders}
+                          alt={activeMeta.filename}
+                          className="max-h-[85vh] w-auto max-w-none object-contain md:max-h-[90vh]"
                         />
                       </div>
                     </div>
@@ -967,23 +940,21 @@ export function WorkspaceApp() {
                       <TextPreview fileUrl={fileUrl} fetchHeaders={workspaceHeaders} />
                     </div>
                   )}
-                  {activeMeta.kind === "text" ? (
-                    <InkOverlay
-                      ref={inkRef}
-                      storageKey={inkStorageKey}
-                      allowFingerInk={allowFingerInk}
-                      touchPanBridge={touchPanBridgeRef}
-                      tool={penTool === "erase" ? "erase" : "draw"}
-                      strokeColor={inkColor}
-                      strokeWidth={inkWidth}
-                      eraserRadius={eraserRadius}
-                      viewportScale={viewportPdfScale}
-                      className={[
-                        "absolute inset-0 z-[50]",
-                        inkPointerActive ? "pointer-events-auto" : "pointer-events-none",
-                      ].join(" ")}
-                    />
-                  ) : null}
+                  <InkOverlay
+                    ref={inkRef}
+                    storageKey={inkStorageKey}
+                    allowFingerInk={allowFingerInk}
+                    touchPanBridge={touchPanBridgeRef}
+                    tool={penTool === "erase" ? "erase" : "draw"}
+                    strokeColor={inkColor}
+                    strokeWidth={inkWidth}
+                    eraserRadius={eraserRadius}
+                    viewportScale={viewportPdfScale}
+                    className={[
+                      "absolute left-0 top-0 z-[50]",
+                      inkPointerActive ? "pointer-events-auto" : "pointer-events-none",
+                    ].join(" ")}
+                  />
                 </div>
               </ZoomPanSurface>
             )}

@@ -233,36 +233,44 @@ export const InkOverlay = forwardRef<InkOverlayHandle, Props>(function InkOverla
   const resizeToContainer = useCallback(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
-    const parent = canvas.parentElement;
-    const pw = parent?.clientWidth ?? 0;
-    const ph = parent?.clientHeight ?? 0;
-    const pr = parent?.getBoundingClientRect();
-    const cw0 = canvas.clientWidth;
-    const ch0 = canvas.clientHeight;
-    const w = Math.max(
-      1,
-      Math.round(
-        cw0 > 0
-          ? cw0
-          : pw > 0
-            ? pw
-            : pr && pr.width > 0
-              ? pr.width
-              : canvas.getBoundingClientRect().width || 1,
-      ),
-    );
-    const h = Math.max(
-      1,
-      Math.round(
-        ch0 > 0
-          ? ch0
-          : ph > 0
-            ? ph
-            : pr && pr.height > 0
-              ? pr.height
-              : canvas.getBoundingClientRect().height || 1,
-      ),
-    );
+    const surface = canvas.closest("[data-zoom-document-surface]") as HTMLElement | null;
+    let w: number;
+    let h: number;
+    if (surface) {
+      w = Math.max(1, Math.round(surface.clientWidth));
+      h = Math.max(1, Math.round(surface.clientHeight));
+    } else {
+      const parent = canvas.parentElement;
+      const pw = parent?.clientWidth ?? 0;
+      const ph = parent?.clientHeight ?? 0;
+      const pr = parent?.getBoundingClientRect();
+      const cw0 = canvas.clientWidth;
+      const ch0 = canvas.clientHeight;
+      w = Math.max(
+        1,
+        Math.round(
+          cw0 > 0
+            ? cw0
+            : pw > 0
+              ? pw
+              : pr && pr.width > 0
+                ? pr.width
+                : canvas.getBoundingClientRect().width || 1,
+        ),
+      );
+      h = Math.max(
+        1,
+        Math.round(
+          ch0 > 0
+            ? ch0
+            : ph > 0
+              ? ph
+              : pr && pr.height > 0
+                ? pr.height
+                : canvas.getBoundingClientRect().height || 1,
+        ),
+      );
+    }
     const base = window.devicePixelRatio || 1;
     const dpr = Math.min(5, Math.max(1, base * Math.max(1, viewportScale)));
     const last = lastAllocRef.current;
@@ -286,8 +294,9 @@ export const InkOverlay = forwardRef<InkOverlayHandle, Props>(function InkOverla
         resizeToContainer();
       });
     });
-    const parent = canvasRef.current?.parentElement;
-    if (parent) ro.observe(parent);
+    const surface = canvasRef.current?.closest("[data-zoom-document-surface]") as HTMLElement | null;
+    const roTarget = surface ?? canvasRef.current?.parentElement;
+    if (roTarget) ro.observe(roTarget);
     return () => {
       ro.disconnect();
       if (roRafRef.current != null) {
@@ -334,11 +343,21 @@ export const InkOverlay = forwardRef<InkOverlayHandle, Props>(function InkOverla
   const clientPointFromClient = useCallback((clientX: number, clientY: number): Point => {
     const canvas = canvasRef.current;
     if (!canvas) return { x: 0, y: 0 };
+    const surface = canvas.closest("[data-zoom-document-surface]") as HTMLElement | null;
+    if (surface) {
+      const sr = surface.getBoundingClientRect();
+      const sw = Math.max(1, surface.clientWidth);
+      const sh = Math.max(1, surface.clientHeight);
+      if (sr.width <= 0 || sr.height <= 0) return { x: 0, y: 0 };
+      const x = ((clientX - sr.left) / sr.width) * sw;
+      const y = ((clientY - sr.top) / sr.height) * sh;
+      if (!Number.isFinite(x) || !Number.isFinite(y)) return { x: 0, y: 0 };
+      return { x, y };
+    }
     const rect = canvas.getBoundingClientRect();
     const cw = canvas.clientWidth;
     const ch = canvas.clientHeight;
     if (rect.width <= 0 || rect.height <= 0 || cw <= 0 || ch <= 0) return { x: 0, y: 0 };
-    // 화면 박스(transform·DPR 스냅 포함)와 캔버스 CSS 레이아웃(clientWidth)이 다를 수 있음(예: ZoomPanSurface `scale()`)
     const x = ((clientX - rect.left) / rect.width) * cw;
     const y = ((clientY - rect.top) / rect.height) * ch;
     if (!Number.isFinite(x) || !Number.isFinite(y)) return { x: 0, y: 0 };
