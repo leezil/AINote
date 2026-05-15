@@ -1,14 +1,7 @@
 "use client";
 
 import { useI18n } from "@/lib/i18n/LocaleProvider";
-import {
-  useCallback,
-  useEffect,
-  useMemo,
-  useRef,
-  useState,
-  type ReactNode,
-} from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Document, Page, pdfjs } from "react-pdf";
 import "react-pdf/dist/Page/AnnotationLayer.css";
 import "react-pdf/dist/Page/TextLayer.css";
@@ -16,9 +9,7 @@ import "react-pdf/dist/Page/TextLayer.css";
 pdfjs.GlobalWorkerOptions.workerSrc = `https://unpkg.com/pdfjs-dist@${pdfjs.version}/build/pdf.worker.min.mjs`;
 
 /**
- * 예전에는 `renderWidth` 오버샘플 + CSS `zoom`으로 선명도를 올렸으나,
- * `zoom`이 레이아웃/히트박스/`getBoundingClientRect()`와 어긋나 필기 좌표가 깨질 수 있음.
- * 이제는 `Page width={displayW}`만 쓰고, 선명도는 `devicePixelRatio`로 보정.
+ * `Page width={displayW}` + `devicePixelRatio`로 선명도 보정(CSS `zoom` 미사용).
  */
 const SHARPNESS_BOOST = 1.38;
 
@@ -29,10 +20,6 @@ type Props = {
   wideMode?: boolean;
   viewportScale?: number;
   onPdfLoaded?: (numPages: number) => void;
-  /** PDF 페이지 박스(`displayW`)와 동일 좌표계에 겹침 — CSS `zoom` 없음 */
-  inkOverlay?: ReactNode;
-  /** true면 PDF 캔버스가 포인터를 가로채지 않음(필기 모드) */
-  inkPointerPassthrough?: boolean;
 };
 
 export function PdfClientView({
@@ -42,8 +29,6 @@ export function PdfClientView({
   wideMode = false,
   viewportScale = 1,
   onPdfLoaded,
-  inkOverlay,
-  inkPointerPassthrough = false,
 }: Props) {
   const { t } = useI18n();
   const containerRef = useRef<HTMLDivElement | null>(null);
@@ -120,37 +105,28 @@ export function PdfClientView({
         }}
       >
         <div className="relative flex w-full justify-center">
-          <div
-            className={
-              inkPointerPassthrough ? "pointer-events-none [&_*]:pointer-events-none" : undefined
+          <Document
+            key={fileUrl}
+            file={file}
+            onLoadSuccess={(pdf) => {
+              onPdfLoaded?.(pdf.numPages);
+            }}
+            loading={
+              <p className="min-h-[36vh] p-8 text-center text-sm text-zinc-500 md:min-h-[320px]">
+                {t("pdf.loading")}
+              </p>
             }
+            error={<p className="p-4 text-sm text-red-600">{t("pdf.error")}</p>}
           >
-            <Document
-              key={fileUrl}
-              file={file}
-              onLoadSuccess={(pdf) => {
-                onPdfLoaded?.(pdf.numPages);
-              }}
-              loading={
-                <p className="min-h-[36vh] p-8 text-center text-sm text-zinc-500 md:min-h-[320px]">
-                  {t("pdf.loading")}
-                </p>
-              }
-              error={<p className="p-4 text-sm text-red-600">{t("pdf.error")}</p>}
-            >
-              <Page
-                key={pageNumber}
-                pageNumber={pageNumber}
-                width={displayW}
-                devicePixelRatio={pdfDevicePixelRatio}
-                renderTextLayer={false}
-                renderAnnotationLayer={false}
-              />
-            </Document>
-          </div>
-          {inkOverlay ? (
-            <div className="pointer-events-none absolute inset-0 z-10">{inkOverlay}</div>
-          ) : null}
+            <Page
+              key={pageNumber}
+              pageNumber={pageNumber}
+              width={displayW}
+              devicePixelRatio={pdfDevicePixelRatio}
+              renderTextLayer={false}
+              renderAnnotationLayer={false}
+            />
+          </Document>
         </div>
       </div>
     </div>
