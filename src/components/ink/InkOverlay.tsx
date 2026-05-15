@@ -171,6 +171,8 @@ export const InkOverlay = forwardRef<InkOverlayHandle, Props>(function InkOverla
   const roRafRef = useRef<number | null>(null);
   const moveDebugUntilRef = useRef(0);
   const ignoredEndLogUntilRef = useRef(0);
+  /** 필기 move에서 redraw를 프레임당 1회로 묶어 메인 스레드 부담·끊김 완화 */
+  const inkRedrawRafRef = useRef<number | null>(null);
   const remoteInkRef = useRef(remoteInk);
   remoteInkRef.current = remoteInk;
   const remoteSaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -248,6 +250,34 @@ export const InkOverlay = forwardRef<InkOverlayHandle, Props>(function InkOverla
       ctx.restore();
     }
   }, [tool, eraserRadius]);
+
+  const redrawRef = useRef(redraw);
+  redrawRef.current = redraw;
+
+  const scheduleInkRedraw = useCallback(() => {
+    if (inkRedrawRafRef.current != null) return;
+    inkRedrawRafRef.current = requestAnimationFrame(() => {
+      inkRedrawRafRef.current = null;
+      redraw();
+    });
+  }, [redraw]);
+
+  const flushInkRedraw = useCallback(() => {
+    if (inkRedrawRafRef.current != null) {
+      cancelAnimationFrame(inkRedrawRafRef.current);
+      inkRedrawRafRef.current = null;
+    }
+    redraw();
+  }, [redraw]);
+
+  useEffect(() => {
+    return () => {
+      if (inkRedrawRafRef.current != null) {
+        cancelAnimationFrame(inkRedrawRafRef.current);
+        inkRedrawRafRef.current = null;
+      }
+    };
+  }, []);
 
   const putInkRemote = useCallback((remote: RemoteInkConfig, strokes: Stroke[]) => {
     const q = remote.page != null ? `?page=${remote.page}` : "";
@@ -343,7 +373,9 @@ export const InkOverlay = forwardRef<InkOverlayHandle, Props>(function InkOverla
     if (!remote) {
       applyLocalFallback();
       bump((n) => n + 1);
-      queueMicrotask(redraw);
+      queueMicrotask(() => {
+        redrawRef.current();
+      });
       notifyInkHistory();
       return () => {
         if (remoteSaveTimerRef.current != null) {
@@ -373,7 +405,9 @@ export const InkOverlay = forwardRef<InkOverlayHandle, Props>(function InkOverla
               // ignore
             }
             bump((n) => n + 1);
-            queueMicrotask(redraw);
+            queueMicrotask(() => {
+              redrawRef.current();
+            });
             notifyInkHistory();
             return;
           }
@@ -384,7 +418,9 @@ export const InkOverlay = forwardRef<InkOverlayHandle, Props>(function InkOverla
       if (cancelled || gen !== inkLoadGenRef.current) return;
       applyLocalFallback();
       bump((n) => n + 1);
-      queueMicrotask(redraw);
+      queueMicrotask(() => {
+        redrawRef.current();
+      });
       notifyInkHistory();
     })();
 
@@ -396,7 +432,7 @@ export const InkOverlay = forwardRef<InkOverlayHandle, Props>(function InkOverla
       }
       void putInkRemote(remote, strokesRef.current).catch(() => {});
     };
-  }, [storageKey, redraw, remoteInk, putInkRemote, notifyInkHistory]);
+  }, [storageKey, remoteInk, putInkRemote, notifyInkHistory]);
 
   const resizeToContainer = useCallback(() => {
     const canvas = canvasRef.current;
@@ -513,7 +549,7 @@ export const InkOverlay = forwardRef<InkOverlayHandle, Props>(function InkOverla
         if (r) {
           void putInkRemote(r, []).catch(() => {});
         }
-        redraw();
+        flushInkRedraw();
         bump((n) => n + 1);
       },
       syncLayout: () => {
@@ -526,7 +562,7 @@ export const InkOverlay = forwardRef<InkOverlayHandle, Props>(function InkOverla
       canUndo: () => undoStackRef.current.length > 0,
       canRedo: () => redoStackRef.current.length > 0,
     }),
-    [persist, redraw, resizeToContainer, putInkRemote, storageKey, pushUndoSnapshot, applyUndo, applyRedo],
+    [persist, redraw, resizeToContainer, putInkRemote, storageKey, pushUndoSnapshot, applyUndo, applyRedo, flushInkRedraw],
   );
 
   const clientPointFromClient = useCallback((clientX: number, clientY: number): Point => {
@@ -577,7 +613,6 @@ export const InkOverlay = forwardRef<InkOverlayHandle, Props>(function InkOverla
               eraseGestureUndoPushedRef.current = true;
             }
             strokesRef.current = next;
-            persist();
             bump((n) => n + 1);
           }
           redraw();
@@ -590,6 +625,7 @@ export const InkOverlay = forwardRef<InkOverlayHandle, Props>(function InkOverla
           width: strokeWidth,
           points: [clientPointFromClient(e.clientX, e.clientY)],
         };
+        flushInkRedraw();
       };
 
       // 펜·마우스·(빈 타입: 일부 스타일러스/WebView)은 항상 필기.
@@ -693,7 +729,7 @@ export const InkOverlay = forwardRef<InkOverlayHandle, Props>(function InkOverla
       }
       beginDrawOrErase();
     },
-    [allowFingerInk, touchPanBridge, tool, strokeColor, strokeWidth, eraserRadius, clientPointFromClient, persist, redraw, pushUndoSnapshot],
+    [allowFingerInk, touchPanBridge, tool, strokeColor, strokeWidth, eraserRadius, clientPointFromClient, redraw, pushUndoSnapshot, flushInkRedraw],
   );
 
   const onPointerMove = useCallback(
@@ -766,7 +802,6 @@ export const InkOverlay = forwardRef<InkOverlayHandle, Props>(function InkOverla
             changed = true;
           }
         }
-        if (changed) persist();
         redraw();
         if (changed) bump((n) => n + 1);
         return;
@@ -774,7 +809,8 @@ export const InkOverlay = forwardRef<InkOverlayHandle, Props>(function InkOverla
 
       if (!currentRef.current) return;
 
-      const minDist = Math.max(0.04, Math.min(0.85, strokeWidth * 0.065));
+      /** 연속 점 최소 간격(CSS px). 크면 샘플이 듬성해져 필기가 끊겨 보임 */
+      const minDist = Math.max(0.012, Math.min(0.38, strokeWidth * 0.024));
       const list = coalescedClientPoints(e);
       const pts = currentRef.current.points;
       for (const ev of list) {
@@ -783,9 +819,19 @@ export const InkOverlay = forwardRef<InkOverlayHandle, Props>(function InkOverla
         if (last && distance(last, p) < minDist) continue;
         pts.push(p);
       }
-      redraw();
+      scheduleInkRedraw();
     },
-    [allowFingerInk, touchPanBridge, tool, strokeWidth, eraserRadius, clientPointFromClient, persist, redraw, pushUndoSnapshot],
+    [
+      allowFingerInk,
+      touchPanBridge,
+      tool,
+      strokeWidth,
+      eraserRadius,
+      clientPointFromClient,
+      redraw,
+      pushUndoSnapshot,
+      scheduleInkRedraw,
+    ],
   );
 
   const endStroke = useCallback(
@@ -852,6 +898,7 @@ export const InkOverlay = forwardRef<InkOverlayHandle, Props>(function InkOverla
         } catch {
           // ignore
         }
+        persist();
         redraw();
         return;
       }
@@ -862,7 +909,7 @@ export const InkOverlay = forwardRef<InkOverlayHandle, Props>(function InkOverla
         persist();
       }
       currentRef.current = null;
-      redraw();
+      flushInkRedraw();
       bump((n) => n + 1);
       try {
         e.currentTarget.releasePointerCapture(e.pointerId);
@@ -870,7 +917,7 @@ export const InkOverlay = forwardRef<InkOverlayHandle, Props>(function InkOverla
         // ignore
       }
     },
-    [allowFingerInk, touchPanBridge, tool, persist, redraw, pushUndoSnapshot],
+    [allowFingerInk, touchPanBridge, tool, persist, redraw, pushUndoSnapshot, flushInkRedraw],
   );
 
   const onPointerLeave = useCallback(() => {

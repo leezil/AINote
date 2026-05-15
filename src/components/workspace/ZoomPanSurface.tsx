@@ -249,10 +249,10 @@ export function ZoomPanSurface({
       ref={viewportRef}
       className={["relative h-full min-h-0 w-full overflow-hidden", className ?? ""].join(" ")}
     >
-      <div className="pointer-events-none absolute right-2 top-2 z-30 flex flex-col gap-1">
+      <div className="ainote-no-select pointer-events-none absolute right-2 top-2 z-30 flex select-none flex-col gap-1">
         <button
           type="button"
-          className="pointer-events-auto rounded-md border border-zinc-300 bg-white/95 px-2 py-1 text-sm shadow dark:border-zinc-600 dark:bg-zinc-900/95"
+          className="pointer-events-auto select-none rounded-md border border-zinc-300 bg-white/95 px-2 py-1 text-sm shadow dark:border-zinc-600 dark:bg-zinc-900/95"
           onPointerDown={ignorePenUi}
           onClick={() => setScale((s) => clampScale(s * 1.22))}
         >
@@ -260,7 +260,7 @@ export function ZoomPanSurface({
         </button>
         <button
           type="button"
-          className="pointer-events-auto rounded-md border border-zinc-300 bg-white/95 px-2 py-1 text-sm shadow dark:border-zinc-600 dark:bg-zinc-900/95"
+          className="pointer-events-auto select-none rounded-md border border-zinc-300 bg-white/95 px-2 py-1 text-sm shadow dark:border-zinc-600 dark:bg-zinc-900/95"
           onPointerDown={ignorePenUi}
           onClick={() => setScale((s) => clampScale(s / 1.22))}
         >
@@ -268,7 +268,7 @@ export function ZoomPanSurface({
         </button>
         <button
           type="button"
-          className="pointer-events-auto rounded-md border border-zinc-300 bg-white/95 px-2 py-1 text-xs shadow dark:border-zinc-600 dark:bg-zinc-900/95"
+          className="pointer-events-auto select-none rounded-md border border-zinc-300 bg-white/95 px-2 py-1 text-xs shadow dark:border-zinc-600 dark:bg-zinc-900/95"
           onPointerDown={ignorePenUi}
           onClick={reset}
         >
