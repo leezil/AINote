@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import { useI18n } from "@/lib/i18n/LocaleProvider";
 import {
+  clampZoomScale,
   computeRenderWidth,
   isDocumentSharpening,
   useFitDocumentWidth,
@@ -11,7 +12,6 @@ import {
 type Props = {
   fileUrl: string;
   fetchHeaders: HeadersInit;
-  alt: string;
   maxWidthPx?: number;
   wideMode?: boolean;
   viewportScale?: number;
@@ -19,14 +19,9 @@ type Props = {
   remeasureKey?: string | number;
 };
 
-/**
- * fetch + Blob URL로 헤더를 적용하고,
- * PDF와 같이 `fitWidth * committedScale` 로 표시 너비를 맞춥니다.
- */
-export function WorkspaceDocImage({
+export function WorkspaceDocText({
   fileUrl,
   fetchHeaders,
-  alt,
   maxWidthPx = 8192,
   wideMode = false,
   viewportScale = 1,
@@ -34,49 +29,44 @@ export function WorkspaceDocImage({
   remeasureKey,
 }: Props) {
   const { t } = useI18n();
-  const [blobSrc, setBlobSrc] = useState<string | null>(null);
-  const [failed, setFailed] = useState(false);
+  const [phase, setPhase] = useState<"loading" | "text" | "error">("loading");
+  const [body, setBody] = useState("");
   const { containerRef, fitWidth } = useFitDocumentWidth({
     maxWidthPx,
     wideMode,
     remeasureKey,
   });
   const renderWidth = computeRenderWidth(fitWidth, committedScale);
+  const safeCommitted = clampZoomScale(committedScale);
   const sharpening = isDocumentSharpening(viewportScale, committedScale);
 
   useEffect(() => {
     let cancelled = false;
-    let objectUrl: string | null = null;
-    setBlobSrc(null);
-    setFailed(false);
-
+    setPhase("loading");
+    setBody("");
     void (async () => {
       try {
         const res = await fetch(fileUrl, { headers: fetchHeaders });
-        if (!res.ok) throw new Error(String(res.status));
-        const blob = await res.blob();
-        if (cancelled) return;
-        objectUrl = URL.createObjectURL(blob);
-        setBlobSrc(objectUrl);
+        const txt = await res.text();
+        if (!cancelled) {
+          setBody(txt);
+          setPhase("text");
+        }
       } catch {
-        if (!cancelled) setFailed(true);
+        if (!cancelled) setPhase("error");
       }
     })();
-
     return () => {
       cancelled = true;
-      if (objectUrl) URL.revokeObjectURL(objectUrl);
     };
   }, [fileUrl, fetchHeaders]);
 
-  if (failed) {
-    return (
-      <p className="p-4 text-sm text-red-600 dark:text-red-400">{t("workspace.imageLoadError")}</p>
-    );
-  }
-  if (!blobSrc) {
-    return <p className="p-4 text-sm text-zinc-500">{t("textPreview.loading")}</p>;
-  }
+  const display =
+    phase === "loading"
+      ? t("textPreview.loading")
+      : phase === "error"
+        ? t("textPreview.error")
+        : body;
 
   return (
     <div
@@ -89,14 +79,15 @@ export function WorkspaceDocImage({
             {t("pdf.sharpening")}
           </span>
         ) : null}
-        {/* eslint-disable-next-line @next/next/no-img-element */}
-        <img
-          src={blobSrc}
-          alt={alt}
-          className="block h-auto max-w-none select-none"
-          style={{ width: renderWidth }}
-          draggable={false}
-        />
+        <pre
+          className="select-none whitespace-pre-wrap break-words p-4 leading-relaxed text-zinc-800 dark:text-zinc-100"
+          style={{
+            width: renderWidth,
+            fontSize: `${0.75 * safeCommitted}rem`,
+          }}
+        >
+          {display}
+        </pre>
       </div>
     </div>
   );

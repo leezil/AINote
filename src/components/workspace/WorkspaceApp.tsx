@@ -14,9 +14,11 @@ import type { StoredDocumentMeta } from "@/lib/storage/document-store";
 import type { AskRequest } from "@/lib/ai/ask-schema";
 import { inferPdfMaterialIntentFromQuestion } from "@/lib/ai/scope-intent";
 import { fetchUploadConfig, uploadDocumentFile } from "@/lib/documents/upload-client";
+import { useCommittedPdfScale } from "@/lib/pdf/committed-scale";
 import { inkDebugLog, readInkDebugFlag } from "@/lib/inkDebug";
 import { InkOverlay, type InkOverlayHandle, type ZoomPanTouchBridge } from "@/components/ink/InkOverlay";
 import { WorkspaceDocImage } from "@/components/workspace/WorkspaceDocImage";
+import { WorkspaceDocText } from "@/components/workspace/WorkspaceDocText";
 import { ZoomPanSurface } from "@/components/workspace/ZoomPanSurface";
 import { useI18n } from "@/lib/i18n/LocaleProvider";
 
@@ -79,9 +81,12 @@ export function WorkspaceApp() {
   const [fullscreenAiOpen, setFullscreenAiOpen] = useState(true);
   const [aiPanelWidthPx, setAiPanelWidthPx] = useState(380);
   const [isMdUp, setIsMdUp] = useState(false);
-  /** 이동·확대 모드에서 CSS scale — PDF DPR 보정(일반/전체화면 각각 유지) */
-  const [zoomScaleWin, setZoomScaleWin] = useState(1);
-  const [zoomScaleFs, setZoomScaleFs] = useState(1);
+  const {
+    zoomScale,
+    committedScale,
+    onGestureScaleChange,
+    onGestureScaleSettled,
+  } = useCommittedPdfScale(1);
   const [inkColor, setInkColor] = useState("#2563eb");
   const [inkWidth, setInkWidth] = useState(2.8);
   const [eraserRadius, setEraserRadius] = useState(18);
@@ -89,7 +94,7 @@ export function WorkspaceApp() {
 
   const inkLayerActive = Boolean(activeId);
   const inkPointerActive = inkLayerActive && gestureInk;
-  const viewportPdfScale = viewerFullscreen ? zoomScaleFs : zoomScaleWin;
+  const viewportPdfScale = zoomScale;
 
   useEffect(() => {
     if (!readInkDebugFlag()) return;
@@ -136,13 +141,6 @@ export function WorkspaceApp() {
     (viewerFullscreen && isMdUp && aiLayoutVerticalStack && aiLandscapeStack === "top") ||
     (viewerFullscreen && isMdUp && aiLayoutHorizontalSplit && aiPanelSide === "left");
 
-  const handleViewerScaleChange = useCallback(
-    (s: number) => {
-      if (viewerFullscreen) setZoomScaleFs(s);
-      else setZoomScaleWin(s);
-    },
-    [viewerFullscreen],
-  );
 
   const aiPanelWidthRef = useRef(aiPanelWidthPx);
   const aiDividerDraggingRef = useRef(false);
@@ -956,17 +954,16 @@ export function WorkspaceApp() {
               <p className="p-6 text-sm text-zinc-500">{t("workspace.pickDocHint")}</p>
             ) : (
               <ZoomPanSurface
-                key={viewerFullscreen ? "zoom-fs" : "zoom-win"}
                 navigationMode={!gestureInk}
                 className={viewerFullscreen ? "h-full min-h-0" : "min-h-[320px]"}
-                initialScale={viewerFullscreen ? zoomScaleFs : zoomScaleWin}
-                onScaleChange={handleViewerScaleChange}
+                initialScale={zoomScale}
+                rasterCommitScale={committedScale}
+                onScaleChange={onGestureScaleChange}
+                onScaleSettled={onGestureScaleSettled}
                 touchBridgeRef={touchPanBridgeRef}
                 stretchContent={viewerFullscreen && inkLayerActive}
                 viewResetKey={
-                  activeMeta
-                    ? `${activeMeta.id}-${currentPage}-${viewerFullscreen ? 1 : 0}`
-                    : "none"
+                  activeMeta ? `${activeMeta.id}-${currentPage}` : "none"
                 }
                 panResetKey={
                   activeMeta
@@ -1014,9 +1011,10 @@ export function WorkspaceApp() {
                             key={activeMeta.id}
                             fileUrl={fileUrl}
                             pageNumber={currentPage}
-                            maxWidthPx={viewerFullscreen ? 8192 : 1280}
+                            maxWidthPx={8192}
                             wideMode={viewerFullscreen}
                             viewportScale={viewportPdfScale}
+                            committedScale={committedScale}
                             onPdfLoaded={(n) => {
                               setPdfNumPagesByDoc((prev) => ({
                                 ...prev,
@@ -1032,25 +1030,23 @@ export function WorkspaceApp() {
                         </div>
                       ) : activeMeta.kind === "image" ? (
                         <div
-                          className={[
-                            "flex justify-center",
-                            viewerFullscreen ? "p-0" : "p-2",
-                          ].join(" ")}
+                          className={
+                            inkPointerActive
+                              ? "pointer-events-none [&_*]:pointer-events-none"
+                              : undefined
+                          }
                         >
-                          <div
-                            className={
-                              inkPointerActive
-                                ? "pointer-events-none [&_*]:pointer-events-none"
-                                : undefined
-                            }
-                          >
-                            <WorkspaceDocImage
-                              fileUrl={fileUrl}
-                              fetchHeaders={workspaceHeaders}
-                              alt={activeMeta.filename}
-                              className="max-h-[85vh] w-auto max-w-none object-contain md:max-h-[90vh]"
-                            />
-                          </div>
+                          <WorkspaceDocImage
+                            key={activeMeta.id}
+                            fileUrl={fileUrl}
+                            fetchHeaders={workspaceHeaders}
+                            alt={activeMeta.filename}
+                            maxWidthPx={8192}
+                            wideMode={viewerFullscreen}
+                            viewportScale={viewportPdfScale}
+                            committedScale={committedScale}
+                            remeasureKey={activeMeta.id}
+                          />
                         </div>
                       ) : (
                         <div
@@ -1060,7 +1056,16 @@ export function WorkspaceApp() {
                               : undefined
                           }
                         >
-                          <TextPreview fileUrl={fileUrl} fetchHeaders={workspaceHeaders} />
+                          <WorkspaceDocText
+                            key={activeMeta.id}
+                            fileUrl={fileUrl}
+                            fetchHeaders={workspaceHeaders}
+                            maxWidthPx={8192}
+                            wideMode={viewerFullscreen}
+                            viewportScale={viewportPdfScale}
+                            committedScale={committedScale}
+                            remeasureKey={activeMeta.id}
+                          />
                         </div>
                       )}
                       <InkOverlay
@@ -1348,51 +1353,5 @@ export function WorkspaceApp() {
         ) : null}
       </main>
     </div>
-  );
-}
-
-function TextPreview({
-  fileUrl,
-  fetchHeaders,
-}: {
-  fileUrl: string;
-  fetchHeaders: Record<string, string>;
-}) {
-  const { t } = useI18n();
-  const [phase, setPhase] = useState<"loading" | "text" | "error">("loading");
-  const [body, setBody] = useState("");
-
-  useEffect(() => {
-    let cancelled = false;
-    setPhase("loading");
-    setBody("");
-    void (async () => {
-      try {
-        const res = await fetch(fileUrl, { headers: fetchHeaders });
-        const txt = await res.text();
-        if (!cancelled) {
-          setBody(txt);
-          setPhase("text");
-        }
-      } catch {
-        if (!cancelled) setPhase("error");
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, [fileUrl, fetchHeaders]);
-
-  const display =
-    phase === "loading"
-      ? t("textPreview.loading")
-      : phase === "error"
-        ? t("textPreview.error")
-        : body;
-
-  return (
-    <pre className="max-h-[70vh] overflow-auto whitespace-pre-wrap break-words p-4 text-xs leading-relaxed text-zinc-800 dark:text-zinc-100">
-      {display}
-    </pre>
   );
 }

@@ -86,6 +86,7 @@ const ko = {
   "zoom.regionAria": "확대 및 이동 영역",
   "pdf.loading": "PDF 불러오는 중…",
   "pdf.error": "PDF를 표시할 수 없습니다.",
+  "pdf.sharpening": "선명도 맞춤…",
 } as const;
 
 const en: Record<keyof typeof ko, string> = {
@@ -174,6 +175,7 @@ const en: Record<keyof typeof ko, string> = {
   "zoom.regionAria": "Zoom and pan area",
   "pdf.loading": "Loading PDF…",
   "pdf.error": "Could not display the PDF.",
+  "pdf.sharpening": "Sharpening…",
 };
 
 export type MessageKey = keyof typeof ko;

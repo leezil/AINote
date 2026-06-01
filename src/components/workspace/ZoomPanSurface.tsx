@@ -18,6 +18,10 @@ type Props = {
   navigationMode?: boolean;
   className?: string;
   onScaleChange?: (scale: number) => void;
+  /** 핀치·드래그·휠이 끝났을 때 — PDF 래스터를 즉시 맞출 때 사용 */
+  onScaleSettled?: (scale: number) => void;
+  /** PDF 등이 이미 `committedScale` 배율로 그려졌을 때 CSS에만 남길 추가 배율 (gesture/committed) */
+  rasterCommitScale?: number;
   initialScale?: number;
   viewResetKey?: string | number;
   panResetKey?: string | number;
@@ -44,6 +48,8 @@ export function ZoomPanSurface({
   navigationMode = false,
   className,
   onScaleChange,
+  onScaleSettled,
+  rasterCommitScale = 1,
   initialScale,
   viewResetKey,
   panResetKey,
@@ -65,6 +71,12 @@ export function ZoomPanSurface({
   const panDrag = useRef<{ x: number; y: number; px: number; py: number } | null>(null);
 
   const clampScale = useCallback((s: number) => Math.min(MAX_SCALE, Math.max(MIN_SCALE, s)), []);
+
+  const notifyScaleSettled = useCallback(() => {
+    onScaleSettled?.(scaleRef.current);
+  }, [onScaleSettled]);
+
+  const cssScaleFactor = scale / Math.max(0.01, rasterCommitScale);
 
   const reset = useCallback(() => {
     setScale(1);
@@ -140,13 +152,14 @@ export function ZoomPanSurface({
       },
       endPinch() {
         pinchTouchRef.current = null;
+        notifyScaleSettled();
       },
     };
     touchBridgeRef.current = bridge;
     return () => {
       touchBridgeRef.current = null;
     };
-  }, [touchBridgeRef, clampScale]);
+  }, [touchBridgeRef, clampScale, notifyScaleSettled]);
 
   useEffect(() => {
     const el = viewportRef.current;
@@ -163,7 +176,6 @@ export function ZoomPanSurface({
       ) {
         return;
       }
-      if (!e.ctrlKey && !e.metaKey && Math.abs(e.deltaY) < 24) return;
       e.preventDefault();
       const mx = e.clientX - r.left - r.width / 2;
       const my = e.clientY - r.top - r.height / 2;
@@ -263,6 +275,7 @@ export function ZoomPanSurface({
       }
     } else if (pointers.current.size === 0) {
       panDrag.current = null;
+      notifyScaleSettled();
     }
 
     try {
@@ -328,7 +341,7 @@ export function ZoomPanSurface({
             .filter(Boolean)
             .join(" ")}
           style={{
-            transform: `translate(${pan.x}px, ${pan.y}px) scale(${scale})`,
+            transform: `translate(${pan.x}px, ${pan.y}px) scale(${cssScaleFactor})`,
             transformOrigin: "center center",
             backfaceVisibility: "hidden",
             WebkitBackfaceVisibility: "hidden" as const,
