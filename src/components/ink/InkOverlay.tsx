@@ -214,7 +214,46 @@ function scheduleApplyLoadedStrokes(
 }
 
 /** 펜 필기 직후 손바닥 touch가 패닝·핀치로 이어지지 않도록 유예(ms) */
-const PEN_PALM_REJECT_GRACE_MS = 480;
+const PEN_PALM_REJECT_GRACE_MS = 120;
+
+const RAW_POINTER_UPDATE_SUPPORTED =
+  typeof window !== "undefined" && "onpointerrawupdate" in window;
+
+function strokeSampleThresholds(strokeWidthPx: number, contentW: number) {
+  const wNorm = strokeWidthNorm(strokeWidthPx, contentW);
+  return {
+    /** 너무 가까운 중복 점 제거 (정규화 좌표) */
+    minDist: Math.max(0.000002, wNorm * 0.005),
+    /** 빠른 이동 시 점이 듬성해지지 않도록 보간 간격 */
+    maxSegment: Math.min(0.018, Math.max(0.0018, wNorm * 0.5)),
+  };
+}
+
+function appendStrokePoints(
+  points: Point[],
+  p: Point,
+  minDist: number,
+  maxSegment: number,
+): void {
+  const last = points.length > 0 ? points[points.length - 1] : null;
+  if (!last) {
+    points.push(p);
+    return;
+  }
+  const d = distance(last, p);
+  if (d < minDist) return;
+  if (d > maxSegment) {
+    const steps = Math.ceil(d / maxSegment);
+    for (let i = 1; i < steps; i++) {
+      const t = i / steps;
+      points.push({
+        x: last.x + (p.x - last.x) * t,
+        y: last.y + (p.y - last.y) * t,
+      });
+    }
+  }
+  points.push(p);
+}
 
 function cancelTouchPanAndPinch(
   bridge: ZoomPanTouchBridge | null | undefined,
@@ -255,15 +294,21 @@ function shouldRejectTouchForPalm(
   return false;
 }
 
-function coalescedClientPoints(
-  e: React.PointerEvent<HTMLCanvasElement>,
+function coalescedFromPointerEvent(
+  e: PointerEvent | React.PointerEvent<HTMLCanvasElement>,
 ): ReadonlyArray<{ clientX: number; clientY: number }> {
-  const ne = e.nativeEvent;
+  const ne = e instanceof PointerEvent ? e : e.nativeEvent;
   if (ne instanceof PointerEvent && typeof ne.getCoalescedEvents === "function") {
     const c = ne.getCoalescedEvents();
     if (c.length > 0) return c;
   }
-  return [e];
+  return [{ clientX: e.clientX, clientY: e.clientY }];
+}
+
+function coalescedClientPoints(
+  e: React.PointerEvent<HTMLCanvasElement>,
+): ReadonlyArray<{ clientX: number; clientY: number }> {
+  return coalescedFromPointerEvent(e);
 }
 
 export const InkOverlay = forwardRef<InkOverlayHandle, Props>(function InkOverlay(
@@ -313,6 +358,8 @@ export const InkOverlay = forwardRef<InkOverlayHandle, Props>(function InkOverla
   /** 펜·스타일러스로 필기 중인지 (손바닥 touch 차단용) */
   const activeDrawIsPenRef = useRef(false);
   const penIgnoreTouchUntilRef = useRef(0);
+  const palmRejectedDuringPenStrokeRef = useRef(false);
+  const extendStrokeFromClientRef = useRef<(clientX: number, clientY: number) => void>(() => {});
 
   const notifyInkHistory = useCallback(() => {
     onInkHistoryChangeRef.current?.();
@@ -389,14 +436,6 @@ export const InkOverlay = forwardRef<InkOverlayHandle, Props>(function InkOverla
   const redrawRef = useRef(redraw);
   redrawRef.current = redraw;
 
-  const scheduleInkRedraw = useCallback(() => {
-    if (inkRedrawRafRef.current != null) return;
-    inkRedrawRafRef.current = requestAnimationFrame(() => {
-      inkRedrawRafRef.current = null;
-      redraw();
-    });
-  }, [redraw]);
-
   const flushInkRedraw = useCallback(() => {
     if (inkRedrawRafRef.current != null) {
       cancelAnimationFrame(inkRedrawRafRef.current);
@@ -451,6 +490,16 @@ export const InkOverlay = forwardRef<InkOverlayHandle, Props>(function InkOverla
       void putInkRemote(remote, strokesRef.current).catch(() => {});
     }, 650);
   }, [storageKey, putInkRemote]);
+
+  const commitInProgressStroke = useCallback(() => {
+    const cur = currentRef.current;
+    if (!cur || cur.points.length === 0) return false;
+    strokesRef.current.push(cur);
+    currentRef.current = null;
+    persist();
+    bump((n) => n + 1);
+    return true;
+  }, [persist]);
 
   const pushUndoSnapshot = useCallback(
     (snapshot: Stroke[]) => {
@@ -751,6 +800,39 @@ export const InkOverlay = forwardRef<InkOverlayHandle, Props>(function InkOverla
     return { x, y };
   }, []);
 
+  const extendStrokeFromClient = useCallback(
+    (clientX: number, clientY: number) => {
+      if (!currentRef.current) return;
+      const canvas = canvasRef.current;
+      const { w } = readContentSize(canvas);
+      const { minDist, maxSegment } = strokeSampleThresholds(strokeWidth, w);
+      const p = clientPointFromClient(clientX, clientY);
+      appendStrokePoints(currentRef.current.points, p, minDist, maxSegment);
+    },
+    [clientPointFromClient, strokeWidth],
+  );
+
+  extendStrokeFromClientRef.current = extendStrokeFromClient;
+
+  useEffect(() => {
+    if (!RAW_POINTER_UPDATE_SUPPORTED) return;
+    const el = canvasRef.current;
+    if (!el) return;
+    const onRaw = (ev: Event) => {
+      if (!(ev instanceof PointerEvent)) return;
+      if (activeDrawPointerId.current !== ev.pointerId) return;
+      if (!currentRef.current || tool !== "draw") return;
+      const pt = ev.pointerType as string;
+      if (pt !== "pen" && pt !== "" && pt !== "mouse") return;
+      for (const point of coalescedFromPointerEvent(ev)) {
+        extendStrokeFromClientRef.current(point.clientX, point.clientY);
+      }
+      flushInkRedraw();
+    };
+    el.addEventListener("pointerrawupdate", onRaw);
+    return () => el.removeEventListener("pointerrawupdate", onRaw);
+  }, [tool, flushInkRedraw]);
+
   const onPointerDown = useCallback(
     (e: React.PointerEvent<HTMLCanvasElement>) => {
       // DOM/일부 WebView는 빈 문자열을 줄 수 있음. React 타입은 mouse|pen|touch만 포함.
@@ -760,6 +842,7 @@ export const InkOverlay = forwardRef<InkOverlayHandle, Props>(function InkOverla
       const beginDrawOrErase = (fromPenLike: boolean) => {
         e.preventDefault();
         if (fromPenLike) {
+          palmRejectedDuringPenStrokeRef.current = false;
           cancelTouchPanAndPinch(
             bridge,
             activeTouchPanId,
@@ -768,11 +851,23 @@ export const InkOverlay = forwardRef<InkOverlayHandle, Props>(function InkOverla
             canvasRef.current,
           );
         }
+        if (
+          activeDrawPointerId.current !== null &&
+          activeDrawPointerId.current !== e.pointerId
+        ) {
+          commitInProgressStroke();
+          try {
+            canvasRef.current?.releasePointerCapture(activeDrawPointerId.current);
+          } catch {
+            // ignore
+          }
+        }
         activeDrawIsPenRef.current = fromPenLike;
         e.currentTarget.setPointerCapture(e.pointerId);
         activeDrawPointerId.current = e.pointerId;
 
         if (tool === "erase") {
+          commitInProgressStroke();
           currentRef.current = null;
           eraseGestureUndoPushedRef.current = false;
           const p = clientPointFromClient(e.clientX, e.clientY);
@@ -800,12 +895,14 @@ export const InkOverlay = forwardRef<InkOverlayHandle, Props>(function InkOverla
         }
 
         eraserHoverRef.current = null;
+        commitInProgressStroke();
         const { w } = readContentSize(canvasRef.current);
         currentRef.current = {
           color: strokeColor,
           width: strokeWidthNorm(strokeWidth, w),
           points: [clientPointFromClient(e.clientX, e.clientY)],
         };
+        pushUndoSnapshot(cloneStrokes(strokesRef.current));
         flushInkRedraw();
       };
 
@@ -833,6 +930,9 @@ export const InkOverlay = forwardRef<InkOverlayHandle, Props>(function InkOverla
             penIgnoreTouchUntilRef.current,
           )
         ) {
+          if (activeDrawIsPenRef.current) {
+            palmRejectedDuringPenStrokeRef.current = true;
+          }
           if (readInkDebugFlag()) {
             inkDebugLog("pointerDown", {
               decision: "touch-rejected-palm-or-pen-active",
@@ -928,7 +1028,19 @@ export const InkOverlay = forwardRef<InkOverlayHandle, Props>(function InkOverla
       }
       beginDrawOrErase(isPenLikePointer(e));
     },
-    [allowFingerInk, touchPanBridge, tool, strokeColor, strokeWidth, eraserRadius, clientPointFromClient, redraw, pushUndoSnapshot, flushInkRedraw],
+    [
+      allowFingerInk,
+      touchPanBridge,
+      tool,
+      strokeColor,
+      strokeWidth,
+      eraserRadius,
+      clientPointFromClient,
+      commitInProgressStroke,
+      redraw,
+      pushUndoSnapshot,
+      flushInkRedraw,
+    ],
   );
 
   const onPointerMove = useCallback(
@@ -971,6 +1083,9 @@ export const InkOverlay = forwardRef<InkOverlayHandle, Props>(function InkOverla
             penIgnoreTouchUntilRef.current,
           )
         ) {
+          if (activeDrawIsPenRef.current) {
+            palmRejectedDuringPenStrokeRef.current = true;
+          }
           if (activeTouchPanId.current === e.pointerId) {
             bridge?.endTouchPan();
             activeTouchPanId.current = null;
@@ -1032,29 +1147,30 @@ export const InkOverlay = forwardRef<InkOverlayHandle, Props>(function InkOverla
 
       if (!currentRef.current) return;
 
-      /** 연속 점 최소 간격(정규화). 크면 샘플이 듬성해져 필기가 끊겨 보임 */
-      const { w } = readContentSize(canvasRef.current);
-      const minDist = Math.max(0.000012, Math.min(0.0005, strokeWidthNorm(strokeWidth, w) * 0.024));
-      const list = coalescedClientPoints(e);
-      const pts = currentRef.current.points;
-      for (const ev of list) {
-        const p = clientPointFromClient(ev.clientX, ev.clientY);
-        const last = pts.length > 0 ? pts[pts.length - 1] : null;
-        if (last && distance(last, p) < minDist) continue;
-        pts.push(p);
+      const ptDraw = e.pointerType as string;
+      if (
+        RAW_POINTER_UPDATE_SUPPORTED &&
+        (ptDraw === "pen" || ptDraw === "")
+      ) {
+        flushInkRedraw();
+        return;
       }
-      scheduleInkRedraw();
+
+      for (const ev of coalescedClientPoints(e)) {
+        extendStrokeFromClient(ev.clientX, ev.clientY);
+      }
+      flushInkRedraw();
     },
     [
       allowFingerInk,
       touchPanBridge,
       tool,
-      strokeWidth,
       eraserRadius,
       clientPointFromClient,
+      extendStrokeFromClient,
       redraw,
       pushUndoSnapshot,
-      scheduleInkRedraw,
+      flushInkRedraw,
     ],
   );
 
@@ -1112,9 +1228,10 @@ export const InkOverlay = forwardRef<InkOverlayHandle, Props>(function InkOverla
       }
       activeDrawPointerId.current = null;
 
-      if (activeDrawIsPenRef.current) {
+      if (activeDrawIsPenRef.current && palmRejectedDuringPenStrokeRef.current) {
         penIgnoreTouchUntilRef.current = performance.now() + PEN_PALM_REJECT_GRACE_MS;
       }
+      palmRejectedDuringPenStrokeRef.current = false;
       activeDrawIsPenRef.current = false;
 
       if (readInkDebugFlag()) {
@@ -1137,7 +1254,6 @@ export const InkOverlay = forwardRef<InkOverlayHandle, Props>(function InkOverla
       }
 
       if (currentRef.current && currentRef.current.points.length >= 1) {
-        pushUndoSnapshot(cloneStrokes(strokesRef.current));
         strokesRef.current.push(currentRef.current);
         persist();
       }
@@ -1153,10 +1269,20 @@ export const InkOverlay = forwardRef<InkOverlayHandle, Props>(function InkOverla
     [allowFingerInk, touchPanBridge, tool, persist, redraw, pushUndoSnapshot, flushInkRedraw],
   );
 
-  const onPointerLeave = useCallback(() => {
-    eraserHoverRef.current = null;
-    redraw();
-  }, [redraw]);
+  const onPointerLeave = useCallback(
+    (e: React.PointerEvent<HTMLCanvasElement>) => {
+      if (
+        activeDrawPointerId.current !== null &&
+        activeDrawPointerId.current === e.pointerId
+      ) {
+        endStroke(e);
+        return;
+      }
+      eraserHoverRef.current = null;
+      redraw();
+    },
+    [redraw, endStroke],
+  );
 
   return (
     <canvas
@@ -1167,6 +1293,7 @@ export const InkOverlay = forwardRef<InkOverlayHandle, Props>(function InkOverla
       onPointerDown={onPointerDown}
       onPointerMove={onPointerMove}
       onPointerLeave={onPointerLeave}
+      onLostPointerCapture={endStroke}
       onPointerUp={endStroke}
       onPointerCancel={endStroke}
     />
