@@ -154,6 +154,26 @@ function trimStack<T>(arr: T[], max: number) {
   while (arr.length > max) arr.shift();
 }
 
+/** 핀치 종료 후 남은 손가락으로 패닝 재개 */
+function resumeTouchPanIfNeeded(
+  touchCoords: Map<number, { x: number; y: number }>,
+  activeTouchPanId: MutableRefObject<number | null>,
+  pinchTouchActive: MutableRefObject<boolean>,
+  bridge: ZoomPanTouchBridge | null | undefined,
+) {
+  if (!bridge || touchCoords.size !== 1) return;
+  if (pinchTouchActive.current) {
+    pinchTouchActive.current = false;
+    bridge.endPinch?.();
+  }
+  const remainingId = touchCoords.keys().next().value;
+  if (remainingId === undefined) return;
+  const loc = touchCoords.get(remainingId);
+  if (!loc) return;
+  activeTouchPanId.current = remainingId;
+  bridge.beginTouchPan(loc.x, loc.y);
+}
+
 const INK_CONTENT_SELECTOR = "[data-ink-document-content]";
 
 function getInkContentEl(canvas: HTMLCanvasElement | null): HTMLElement | null {
@@ -877,12 +897,13 @@ export const InkOverlay = forwardRef<InkOverlayHandle, Props>(function InkOverla
           bridge.updatePinch?.(d1);
           return;
         }
-        if (
-          activeTouchPanId.current === e.pointerId &&
-          touchCoordsRef.current.size === 1 &&
-          bridge
-        ) {
-          bridge.moveTouchPan(e.clientX, e.clientY);
+        if (touchCoordsRef.current.size === 1 && bridge) {
+          if (activeTouchPanId.current !== e.pointerId) {
+            activeTouchPanId.current = e.pointerId;
+            bridge.beginTouchPan(e.clientX, e.clientY);
+          } else {
+            bridge.moveTouchPan(e.clientX, e.clientY);
+          }
         }
         return;
       }
@@ -963,11 +984,9 @@ export const InkOverlay = forwardRef<InkOverlayHandle, Props>(function InkOverla
         if (touchCoordsRef.current.has(e.pointerId)) {
           touchCoordsRef.current.delete(e.pointerId);
         }
-        if (touchCoordsRef.current.size < 2) {
-          if (pinchTouchActive.current) {
-            pinchTouchActive.current = false;
-            bridge.endPinch?.();
-          }
+        if (touchCoordsRef.current.size < 2 && pinchTouchActive.current) {
+          pinchTouchActive.current = false;
+          bridge.endPinch?.();
         }
         if (activeTouchPanId.current === e.pointerId) {
           activeTouchPanId.current = null;
@@ -978,6 +997,12 @@ export const InkOverlay = forwardRef<InkOverlayHandle, Props>(function InkOverla
             // ignore
           }
         }
+        resumeTouchPanIfNeeded(
+          touchCoordsRef.current,
+          activeTouchPanId,
+          pinchTouchActive,
+          bridge,
+        );
         return;
       }
 

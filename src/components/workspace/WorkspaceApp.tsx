@@ -985,7 +985,9 @@ export function WorkspaceApp() {
                 >
                   <div
                     className={[
-                      viewerFullscreen && inkLayerActive ? "max-h-full min-h-0 overflow-auto" : "",
+                      viewerFullscreen && inkLayerActive
+                        ? "max-h-full min-h-0 touch-none overflow-hidden"
+                        : "",
                     ]
                       .filter(Boolean)
                       .join(" ")}

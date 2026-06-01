@@ -81,6 +81,8 @@ export function ZoomPanSurface({
       panDrag.current = null;
       pinchSession.current = null;
       pointers.current.clear();
+      touchDragRef.current = null;
+      pinchTouchRef.current = null;
     }
   }, [navigationMode]);
 
@@ -215,12 +217,24 @@ export function ZoomPanSurface({
       if (d1 > 8 && ps.d0 > 8) {
         setScale(clampScale(ps.s0 * (d1 / ps.d0)));
       }
-    } else if (list.length === 1 && panDrag.current && !pinchSession.current) {
+      panDrag.current = null;
+    } else if (list.length === 1) {
+      if (!panDrag.current) {
+        const p = panRef.current;
+        const ev = list[0];
+        panDrag.current = { x: p.x, y: p.y, px: ev.clientX, py: ev.clientY };
+      }
+      if (pinchSession.current) {
+        pinchSession.current = null;
+      }
       const d = panDrag.current;
-      setPan({
-        x: d.x + (e.clientX - d.px),
-        y: d.y + (e.clientY - d.py),
-      });
+      if (d) {
+        const ev = list[0];
+        setPan({
+          x: d.x + (ev.clientX - d.px),
+          y: d.y + (ev.clientY - d.py),
+        });
+      }
     }
   };
 
@@ -228,8 +242,29 @@ export function ZoomPanSurface({
     if (!navigationMode) return;
     if (!pointers.current.has(e.pointerId)) return;
     pointers.current.delete(e.pointerId);
-    if (pointers.current.size < 2) pinchSession.current = null;
-    if (pointers.current.size === 0) panDrag.current = null;
+
+    if (pointers.current.size < 2) {
+      pinchSession.current = null;
+    }
+
+    if (pointers.current.size === 1) {
+      const remaining = [...pointers.current.values()][0];
+      const p = panRef.current;
+      panDrag.current = {
+        x: p.x,
+        y: p.y,
+        px: remaining.clientX,
+        py: remaining.clientY,
+      };
+      try {
+        e.currentTarget.setPointerCapture(remaining.pointerId);
+      } catch {
+        // ignore
+      }
+    } else if (pointers.current.size === 0) {
+      panDrag.current = null;
+    }
+
     try {
       e.currentTarget.releasePointerCapture(e.pointerId);
     } catch {
@@ -247,7 +282,7 @@ export function ZoomPanSurface({
   return (
     <div
       ref={viewportRef}
-      className={["relative h-full min-h-0 w-full overflow-hidden", className ?? ""].join(" ")}
+      className={["relative h-full min-h-0 w-full overflow-hidden overscroll-none", className ?? ""].join(" ")}
     >
       <div className="ainote-no-select pointer-events-none absolute right-2 top-2 z-30 flex select-none flex-col gap-1">
         <button
