@@ -3,6 +3,10 @@ import type { NextConfig } from "next";
 const nextConfig: NextConfig = {
   /** pdfjs is resolved via react-pdf; keep it external for server routes. */
   serverExternalPackages: ["pdfjs-dist", "@napi-rs/canvas"],
+  experimental: {
+    /** 로컬/자체 호스팅에서 API 경유 업로드 최대 50MB */
+    proxyClientMaxBodySize: "50mb",
+  },
   /**
    * Node 런타임에서 pdf.js fake worker가 `import(pdf.worker.mjs)`를 하는데,
    * 기본 트레이싱에 worker 파일이 빠져 Vercel에서 "Cannot find module ... pdf.worker.mjs"가 납니다.

@@ -13,6 +13,7 @@ import { toJpeg } from "html-to-image";
 import type { StoredDocumentMeta } from "@/lib/storage/document-store";
 import type { AskRequest } from "@/lib/ai/ask-schema";
 import { inferPdfMaterialIntentFromQuestion } from "@/lib/ai/scope-intent";
+import { fetchUploadConfig, uploadDocumentFile } from "@/lib/documents/upload-client";
 import { inkDebugLog, readInkDebugFlag } from "@/lib/inkDebug";
 import { InkOverlay, type InkOverlayHandle, type ZoomPanTouchBridge } from "@/components/ink/InkOverlay";
 import { WorkspaceDocImage } from "@/components/workspace/WorkspaceDocImage";
@@ -438,29 +439,34 @@ export function WorkspaceApp() {
     [documents],
   );
 
+  const uploadConfigRef = useRef<Awaited<ReturnType<typeof fetchUploadConfig>> | null>(null);
+
+  useEffect(() => {
+    void fetchUploadConfig().then((cfg) => {
+      uploadConfigRef.current = cfg;
+    });
+  }, []);
+
   const onUpload: React.ChangeEventHandler<HTMLInputElement> = async (e) => {
     const file = e.target.files?.[0];
     e.target.value = "";
     if (!file) return;
-    const fd = new FormData();
-    fd.append("file", file);
-    const res = await fetch("/api/documents", {
-      method: "POST",
-      body: fd,
-      headers: workspaceHeaders,
-    });
-    if (!res.ok) {
-      const err = await res.json().catch(() => ({}));
-      setError(
-        translateError(
-          typeof err.error === "string" ? err.error : t("workspace.errUploadFailed"),
-        ),
+    try {
+      const config = uploadConfigRef.current ?? (await fetchUploadConfig());
+      uploadConfigRef.current = config;
+      const doc = await uploadDocumentFile(
+        file,
+        defaultWorkspaceId,
+        workspaceHeaders,
+        config,
       );
-      return;
+      await refreshDocuments();
+      openDocument(doc.id, { kind: doc.kind });
+    } catch (err) {
+      setError(
+        translateError(err instanceof Error ? err.message : t("workspace.errUploadFailed")),
+      );
     }
-    const data = (await res.json()) as { document: StoredDocumentMeta };
-    await refreshDocuments();
-    openDocument(data.document.id, { kind: data.document.kind });
   };
 
   const selectTab = useCallback(

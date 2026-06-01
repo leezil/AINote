@@ -72,6 +72,7 @@ const ko = {
   "api.unsupportedFormat": "지원하지 않는 형식입니다. (pdf, 이미지, txt)",
   "api.storageCapExceeded":
     "저장 용량 1GB 한도를 초과합니다. 기존 문서를 지워도 새 파일이 너무 크거나, 비울 수 없습니다.",
+  "api.fileTooLarge": "파일당 최대 50MB까지 업로드할 수 있습니다.",
   "api.notPdf": "해당 파일은 PDF가 아닙니다.",
   "api.notText": "해당 파일은 텍스트 문서가 아닙니다.",
   "api.notImage": "해당 파일은 이미지가 아닙니다.",
@@ -159,6 +160,7 @@ const en: Record<keyof typeof ko, string> = {
   "api.unsupportedFormat": "Unsupported format. Use PDF, an image, or txt.",
   "api.storageCapExceeded":
     "Storage exceeds the 1 GB limit. The new file may be too large even after clearing old documents.",
+  "api.fileTooLarge": "Each file can be at most 50 MB.",
   "api.notPdf": "This file is not a PDF.",
   "api.notText": "This file is not a text document.",
   "api.notImage": "This file is not an image.",

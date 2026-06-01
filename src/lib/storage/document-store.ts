@@ -9,6 +9,7 @@ import {
   totalBytesOfDocuments,
   WORKSPACE_STORAGE_CAP_BYTES,
 } from "@/lib/storage/storage-policy";
+import { blobWorkspacePrefix, sanitizeWorkspaceId } from "@/lib/storage/workspace-id";
 
 export type StoredDocumentKind = "pdf" | "image" | "text";
 
@@ -30,11 +31,6 @@ type Manifest = {
 };
 
 export { WORKSPACE_STORAGE_CAP_BYTES, getAiSuccessAskPurgeEvery };
-
-function sanitizeWorkspaceId(workspaceId: string): string {
-  const safe = workspaceId.replace(/[^a-zA-Z0-9_-]/g, "");
-  return safe.length > 0 ? safe : "local";
-}
 
 /** 로컬 디스크·Vercel Blob 공통 필기 JSON 파일명 */
 function inkStorageFilename(meta: StoredDocumentMeta, page?: number): string {
@@ -250,7 +246,7 @@ export class BlobDocumentStore {
   }
 
   private prefix(): string {
-    return `ainote/ws_${sanitizeWorkspaceId(this.workspaceId)}`;
+    return blobWorkspacePrefix(this.workspaceId);
   }
 
   private manifestPathname(): string {
@@ -420,6 +416,21 @@ export class BlobDocumentStore {
       const oldest = sortDocumentsOldestFirst(docs)[0];
       await this.deleteDocument(oldest.id);
     }
+  }
+
+  /** private Blob URL 등 외부 blob 주소에서 바이트를 읽습니다. */
+  async readBytesAtUrl(url: string): Promise<Buffer | null> {
+    return this.readBlobUrlBytes(url);
+  }
+
+  /** 클라이언트가 Blob에 직접 올린 뒤 manifest만 등록합니다. */
+  async registerClientBlobDocument(meta: StoredDocumentMeta): Promise<void> {
+    if (!meta.blobUrl) {
+      throw new Error("AINOTE_BLOB_URL_REQUIRED");
+    }
+    const manifest = await this.readManifest();
+    manifest.documents = [meta, ...manifest.documents.filter((d) => d.id !== meta.id)];
+    await this.writeManifest(manifest);
   }
 
   async appendDocument(meta: StoredDocumentMeta, data: Buffer): Promise<void> {
