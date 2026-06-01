@@ -79,3 +79,35 @@ export function isLikelyStylusAsTouch(e: {
   if (p > 0.04 && w > 0 && h > 0 && maxWH <= 36) return true;
   return false;
 }
+
+/**
+ * 손바닥·손날 등 넓은 접촉면 touch. (펜 필기 중 손을 대는 경우)
+ * `width`/`height`는 CSS px 기준 PointerEvent.contact geometry.
+ */
+export function isLikelyPalmTouch(e: {
+  pointerType: string;
+  width: number;
+  height: number;
+}): boolean {
+  if (String(e.pointerType) !== "touch") return false;
+  const w = Number(e.width) || 0;
+  const h = Number(e.height) || 0;
+  if (w <= 0 || h <= 0) return false;
+  const maxWH = Math.max(w, h);
+  if (maxWH >= 28) return true;
+  if (w * h >= 420) return true;
+  return false;
+}
+
+/** 펜·스타일러스 포인터인지 (touch가 아닌 pen, 또는 touch-as-stylus 휴리스틱) */
+export function isPenLikePointer(e: {
+  pointerType: string;
+  width: number;
+  height: number;
+  pressure: number;
+}): boolean {
+  const pt = String(e.pointerType);
+  if (pt === "pen" || pt === "") return true;
+  if (pt === "touch") return isLikelyStylusAsTouch(e);
+  return false;
+}

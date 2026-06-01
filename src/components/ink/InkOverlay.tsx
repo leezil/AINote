@@ -13,7 +13,9 @@ import {
 import {
   inkDebugLog,
   inkPointerDiagnostics,
+  isLikelyPalmTouch,
   isLikelyStylusAsTouch,
+  isPenLikePointer,
   readInkDebugFlag,
 } from "@/lib/inkDebug";
 import {
@@ -211,6 +213,48 @@ function scheduleApplyLoadedStrokes(
   requestAnimationFrame(() => attempt(8));
 }
 
+/** 펜 필기 직후 손바닥 touch가 패닝·핀치로 이어지지 않도록 유예(ms) */
+const PEN_PALM_REJECT_GRACE_MS = 480;
+
+function cancelTouchPanAndPinch(
+  bridge: ZoomPanTouchBridge | null | undefined,
+  activeTouchPanId: MutableRefObject<number | null>,
+  pinchTouchActive: MutableRefObject<boolean>,
+  touchCoords: Map<number, { x: number; y: number }>,
+  canvas: HTMLCanvasElement | null,
+) {
+  const panPid = activeTouchPanId.current;
+  if (panPid !== null) {
+    bridge?.endTouchPan();
+    activeTouchPanId.current = null;
+    if (canvas) {
+      try {
+        canvas.releasePointerCapture(panPid);
+      } catch {
+        // ignore
+      }
+    }
+  }
+  if (pinchTouchActive.current) {
+    pinchTouchActive.current = false;
+    bridge?.endPinch?.();
+  }
+  touchCoords.clear();
+}
+
+function shouldRejectTouchForPalm(
+  e: React.PointerEvent<HTMLCanvasElement>,
+  allowFingerInk: boolean,
+  penDrawing: boolean,
+  penIgnoreTouchUntil: number,
+): boolean {
+  if (isLikelyPalmTouch(e)) return true;
+  if (allowFingerInk) return false;
+  if (penDrawing) return true;
+  if (performance.now() < penIgnoreTouchUntil) return true;
+  return false;
+}
+
 function coalescedClientPoints(
   e: React.PointerEvent<HTMLCanvasElement>,
 ): ReadonlyArray<{ clientX: number; clientY: number }> {
@@ -266,6 +310,9 @@ export const InkOverlay = forwardRef<InkOverlayHandle, Props>(function InkOverla
   const eraseGestureUndoPushedRef = useRef(false);
   const onInkHistoryChangeRef = useRef(onInkHistoryChange);
   onInkHistoryChangeRef.current = onInkHistoryChange;
+  /** 펜·스타일러스로 필기 중인지 (손바닥 touch 차단용) */
+  const activeDrawIsPenRef = useRef(false);
+  const penIgnoreTouchUntilRef = useRef(0);
 
   const notifyInkHistory = useCallback(() => {
     onInkHistoryChangeRef.current?.();
@@ -710,8 +757,18 @@ export const InkOverlay = forwardRef<InkOverlayHandle, Props>(function InkOverla
       const pt = e.pointerType as string;
       const bridge = touchPanBridge?.current;
 
-      const beginDrawOrErase = () => {
+      const beginDrawOrErase = (fromPenLike: boolean) => {
         e.preventDefault();
+        if (fromPenLike) {
+          cancelTouchPanAndPinch(
+            bridge,
+            activeTouchPanId,
+            pinchTouchActive,
+            touchCoordsRef.current,
+            canvasRef.current,
+          );
+        }
+        activeDrawIsPenRef.current = fromPenLike;
         e.currentTarget.setPointerCapture(e.pointerId);
         activeDrawPointerId.current = e.pointerId;
 
@@ -763,11 +820,29 @@ export const InkOverlay = forwardRef<InkOverlayHandle, Props>(function InkOverla
             ...inkPointerDiagnostics(e),
           });
         }
-        beginDrawOrErase();
+        beginDrawOrErase(isPenLikePointer(e));
         return;
       }
 
       if (pt === "touch") {
+        if (
+          shouldRejectTouchForPalm(
+            e,
+            allowFingerInk,
+            activeDrawPointerId.current !== null && activeDrawIsPenRef.current,
+            penIgnoreTouchUntilRef.current,
+          )
+        ) {
+          if (readInkDebugFlag()) {
+            inkDebugLog("pointerDown", {
+              decision: "touch-rejected-palm-or-pen-active",
+              tool,
+              ...inkPointerDiagnostics(e),
+            });
+          }
+          e.preventDefault();
+          return;
+        }
         const stylusAsTouch = isLikelyStylusAsTouch(e);
         if (stylusAsTouch) {
           if (readInkDebugFlag()) {
@@ -779,7 +854,7 @@ export const InkOverlay = forwardRef<InkOverlayHandle, Props>(function InkOverla
               ...inkPointerDiagnostics(e),
             });
           }
-          beginDrawOrErase();
+          beginDrawOrErase(true);
           return;
         }
         // 손가락 touch — 패닝 또는(옵션) 손가락 필기
@@ -829,7 +904,7 @@ export const InkOverlay = forwardRef<InkOverlayHandle, Props>(function InkOverla
               ...inkPointerDiagnostics(e),
             });
           }
-          beginDrawOrErase();
+          beginDrawOrErase(false);
           return;
         }
         if (readInkDebugFlag()) {
@@ -851,7 +926,7 @@ export const InkOverlay = forwardRef<InkOverlayHandle, Props>(function InkOverla
           ...inkPointerDiagnostics(e),
         });
       }
-      beginDrawOrErase();
+      beginDrawOrErase(isPenLikePointer(e));
     },
     [allowFingerInk, touchPanBridge, tool, strokeColor, strokeWidth, eraserRadius, clientPointFromClient, redraw, pushUndoSnapshot, flushInkRedraw],
   );
@@ -888,6 +963,21 @@ export const InkOverlay = forwardRef<InkOverlayHandle, Props>(function InkOverla
       }
 
       if (pt === "touch" && !allowFingerInk && !drawingThisPointer) {
+        if (
+          shouldRejectTouchForPalm(
+            e,
+            allowFingerInk,
+            activeDrawPointerId.current !== null && activeDrawIsPenRef.current,
+            penIgnoreTouchUntilRef.current,
+          )
+        ) {
+          if (activeTouchPanId.current === e.pointerId) {
+            bridge?.endTouchPan();
+            activeTouchPanId.current = null;
+          }
+          touchCoordsRef.current.delete(e.pointerId);
+          return;
+        }
         if (touchCoordsRef.current.has(e.pointerId)) {
           touchCoordsRef.current.set(e.pointerId, { x: e.clientX, y: e.clientY });
         }
@@ -1021,6 +1111,11 @@ export const InkOverlay = forwardRef<InkOverlayHandle, Props>(function InkOverla
         return;
       }
       activeDrawPointerId.current = null;
+
+      if (activeDrawIsPenRef.current) {
+        penIgnoreTouchUntilRef.current = performance.now() + PEN_PALM_REJECT_GRACE_MS;
+      }
+      activeDrawIsPenRef.current = false;
 
       if (readInkDebugFlag()) {
         inkDebugLog("pointerUpOrCancel", {
