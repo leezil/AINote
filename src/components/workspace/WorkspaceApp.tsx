@@ -980,8 +980,8 @@ export function WorkspaceApp() {
                     "relative isolate mx-auto max-w-full",
                     activeMeta.kind === "pdf" ? "ainote-no-select" : "",
                     viewerFullscreen
-                      ? "flex min-h-0 w-max max-w-full max-h-full flex-col items-center"
-                      : "w-max",
+                      ? "flex min-h-0 w-full min-w-0 max-w-full max-h-full flex-col items-center"
+                      : "w-full min-w-0",
                   ]
                     .filter(Boolean)
                     .join(" ")}
@@ -1045,7 +1045,6 @@ export function WorkspaceApp() {
                             wideMode={viewerFullscreen}
                             viewportScale={viewportPdfScale}
                             committedScale={committedScale}
-                            remeasureKey={activeMeta.id}
                           />
                         </div>
                       ) : (
@@ -1064,7 +1063,6 @@ export function WorkspaceApp() {
                             wideMode={viewerFullscreen}
                             viewportScale={viewportPdfScale}
                             committedScale={committedScale}
-                            remeasureKey={activeMeta.id}
                           />
                         </div>
                       )}

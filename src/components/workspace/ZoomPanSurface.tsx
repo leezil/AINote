@@ -12,6 +12,7 @@ import {
   type ReactNode,
 } from "react";
 import type { ZoomPanTouchBridge } from "@/components/ink/InkOverlay";
+import { ZoomPanViewportWidthContext } from "@/components/workspace/ZoomPanViewportWidthContext";
 
 type Props = {
   children: ReactNode;
@@ -33,6 +34,8 @@ type Props = {
 const MIN_SCALE = 0.22;
 const MAX_SCALE = 10;
 const WHEEL_SCALE_STEP = 0.12;
+const WHEEL_SETTLE_MS = 280;
+const SETTLE_EPSILON = 0.02;
 
 type PinchSession = {
   d0: number;
@@ -58,6 +61,7 @@ export function ZoomPanSurface({
 }: Props) {
   const { t } = useI18n();
   const [scale, setScale] = useState(() => initialScale ?? 1);
+  const [viewportWidth, setViewportWidth] = useState(960);
   const [pan, setPan] = useState({ x: 0, y: 0 });
   const scaleRef = useRef(scale);
   scaleRef.current = scale;
@@ -72,8 +76,14 @@ export function ZoomPanSurface({
 
   const clampScale = useCallback((s: number) => Math.min(MAX_SCALE, Math.max(MIN_SCALE, s)), []);
 
+  const lastSettledScaleRef = useRef(scale);
+  const wheelSettleTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
   const notifyScaleSettled = useCallback(() => {
-    onScaleSettled?.(scaleRef.current);
+    const s = scaleRef.current;
+    if (Math.abs(s - lastSettledScaleRef.current) < SETTLE_EPSILON) return;
+    lastSettledScaleRef.current = s;
+    onScaleSettled?.(s);
   }, [onScaleSettled]);
 
   const cssScaleFactor = scale / Math.max(0.01, rasterCommitScale);
@@ -99,6 +109,19 @@ export function ZoomPanSurface({
   }, [navigationMode]);
 
   useEffect(() => {
+    const el = viewportRef.current;
+    if (!el) return;
+    const measure = () => {
+      const w = el.clientWidth;
+      if (w >= 64) setViewportWidth(w);
+    };
+    const ro = new ResizeObserver(measure);
+    ro.observe(el);
+    measure();
+    return () => ro.disconnect();
+  }, []);
+
+  useEffect(() => {
     onScaleChange?.(scale);
   }, [scale, onScaleChange]);
 
@@ -111,6 +134,7 @@ export function ZoomPanSurface({
     pointers.current.clear();
     touchDragRef.current = null;
     pinchTouchRef.current = null;
+    lastSettledScaleRef.current = 1;
     onScaleChange?.(1);
   }, [viewResetKey, onScaleChange]);
 
@@ -189,10 +213,22 @@ export function ZoomPanSurface({
         }));
         return next;
       });
+      if (wheelSettleTimerRef.current != null) {
+        clearTimeout(wheelSettleTimerRef.current);
+      }
+      wheelSettleTimerRef.current = setTimeout(() => {
+        wheelSettleTimerRef.current = null;
+        notifyScaleSettled();
+      }, WHEEL_SETTLE_MS);
     };
     el.addEventListener("wheel", onWheel, { passive: false, capture: true });
-    return () => el.removeEventListener("wheel", onWheel, true);
-  }, [clampScale]);
+    return () => {
+      el.removeEventListener("wheel", onWheel, true);
+      if (wheelSettleTimerRef.current != null) {
+        clearTimeout(wheelSettleTimerRef.current);
+      }
+    };
+  }, [clampScale, notifyScaleSettled]);
 
   const distance = (a: ReactPointerEvent<HTMLDivElement>, b: ReactPointerEvent<HTMLDivElement>) =>
     Math.hypot(a.clientX - b.clientX, a.clientY - b.clientY);
@@ -293,8 +329,10 @@ export function ZoomPanSurface({
   };
 
   return (
+    <ZoomPanViewportWidthContext.Provider value={viewportWidth}>
     <div
       ref={viewportRef}
+      data-ainote-zoom-viewport
       className={["relative h-full min-h-0 w-full overflow-hidden overscroll-none", className ?? ""].join(" ")}
     >
       <div className="ainote-no-select pointer-events-none absolute right-2 top-2 z-30 flex select-none flex-col gap-1">
@@ -335,7 +373,7 @@ export function ZoomPanSurface({
             "will-change-transform max-h-full max-w-full min-h-0",
             stretchContent
               ? "flex h-full w-full justify-center"
-              : "flex w-max min-h-0 max-h-full flex-col items-stretch",
+              : "flex w-full min-w-0 min-h-0 max-h-full flex-col items-stretch",
             navigationMode ? "pointer-events-none" : "",
           ]
             .filter(Boolean)
@@ -363,5 +401,6 @@ export function ZoomPanSurface({
         ) : null}
       </div>
     </div>
+    </ZoomPanViewportWidthContext.Provider>
   );
 }

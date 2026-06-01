@@ -8,6 +8,7 @@ import "react-pdf/dist/Page/TextLayer.css";
 import {
   computeRenderWidth,
   isDocumentSharpening,
+  quantizeRenderWidthPx,
   useFitDocumentWidth,
 } from "@/lib/documents/zoomable-document";
 
@@ -36,12 +37,9 @@ export function PdfClientView({
   onPdfLoaded,
 }: Props) {
   const { t } = useI18n();
-  const { containerRef, fitWidth } = useFitDocumentWidth({
-    maxWidthPx,
-    wideMode,
-    remeasureKey: `${fileUrl}-${pageNumber}`,
-  });
+  const { fitWidth } = useFitDocumentWidth({ maxWidthPx, wideMode });
   const renderWidth = computeRenderWidth(fitWidth, committedScale);
+  const renderKey = quantizeRenderWidthPx(renderWidth);
   const sharpening = isDocumentSharpening(viewportScale, committedScale);
 
   const baseDpr =
@@ -51,10 +49,7 @@ export function PdfClientView({
   const file = useMemo(() => ({ url: fileUrl }), [fileUrl]);
 
   return (
-    <div
-      ref={containerRef}
-      className="ainote-no-select flex w-full justify-center bg-zinc-100/80 dark:bg-zinc-900/60"
-    >
+    <div className="ainote-no-select flex w-full min-w-0 justify-center bg-zinc-100/80 dark:bg-zinc-900/60">
       <div
         className="relative mx-auto flex justify-center"
         style={{
@@ -82,7 +77,7 @@ export function PdfClientView({
             error={<p className="p-4 text-sm text-red-600">{t("pdf.error")}</p>}
           >
             <Page
-              key={`${pageNumber}-${renderWidth}`}
+              key={`${pageNumber}-${renderKey}`}
               pageNumber={pageNumber}
               width={renderWidth}
               devicePixelRatio={pdfDevicePixelRatio}

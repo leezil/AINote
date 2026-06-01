@@ -16,7 +16,6 @@ type Props = {
   wideMode?: boolean;
   viewportScale?: number;
   committedScale?: number;
-  remeasureKey?: string | number;
 };
 
 /**
@@ -31,16 +30,11 @@ export function WorkspaceDocImage({
   wideMode = false,
   viewportScale = 1,
   committedScale = 1,
-  remeasureKey,
 }: Props) {
   const { t } = useI18n();
   const [blobSrc, setBlobSrc] = useState<string | null>(null);
   const [failed, setFailed] = useState(false);
-  const { containerRef, fitWidth } = useFitDocumentWidth({
-    maxWidthPx,
-    wideMode,
-    remeasureKey,
-  });
+  const { fitWidth } = useFitDocumentWidth({ maxWidthPx, wideMode });
   const renderWidth = computeRenderWidth(fitWidth, committedScale);
   const sharpening = isDocumentSharpening(viewportScale, committedScale);
 
@@ -79,10 +73,7 @@ export function WorkspaceDocImage({
   }
 
   return (
-    <div
-      ref={containerRef}
-      className="ainote-no-select flex w-full justify-center bg-zinc-100/80 dark:bg-zinc-900/60"
-    >
+    <div className="ainote-no-select flex w-full min-w-0 justify-center bg-zinc-100/80 dark:bg-zinc-900/60">
       <div className="relative" style={{ width: renderWidth }}>
         {sharpening ? (
           <span className="pointer-events-none absolute right-1 top-1 z-10 rounded bg-black/50 px-1.5 py-0.5 text-[10px] text-white">
