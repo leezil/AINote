@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { useI18n } from "@/lib/i18n/LocaleProvider";
+import { computePdfDevicePixelRatio } from "@/lib/documents/pdf-render-quality";
 import {
   computeRenderWidth,
   isDocumentSharpening,
@@ -34,9 +35,16 @@ export function WorkspaceDocImage({
   const { t } = useI18n();
   const [blobSrc, setBlobSrc] = useState<string | null>(null);
   const [failed, setFailed] = useState(false);
+  const [aspectRatio, setAspectRatio] = useState(4 / 3);
   const { fitWidth } = useFitDocumentWidth({ maxWidthPx, wideMode });
   const renderWidth = computeRenderWidth(fitWidth, committedScale);
   const sharpening = isDocumentSharpening(viewportScale, committedScale);
+  const windowDpr = typeof window !== "undefined" ? window.devicePixelRatio || 1 : 1;
+  const displayDpr = computePdfDevicePixelRatio(
+    committedScale,
+    viewportScale,
+    windowDpr,
+  );
 
   useEffect(() => {
     let cancelled = false;
@@ -80,14 +88,34 @@ export function WorkspaceDocImage({
             {t("pdf.sharpening")}
           </span>
         ) : null}
-        {/* eslint-disable-next-line @next/next/no-img-element */}
-        <img
-          src={blobSrc}
-          alt={alt}
-          className="block h-auto max-w-none select-none"
-          style={{ width: renderWidth }}
-          draggable={false}
-        />
+        <div
+          className="overflow-hidden"
+          style={{
+            width: renderWidth,
+            height: Math.round(renderWidth * aspectRatio),
+          }}
+        >
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img
+            src={blobSrc}
+            alt={alt}
+            className="block max-w-none select-none"
+            style={{
+              width: renderWidth * displayDpr,
+              height: "auto",
+              transform: `scale(${1 / displayDpr})`,
+              transformOrigin: "top left",
+            }}
+            draggable={false}
+            decoding="async"
+            onLoad={(e) => {
+              const img = e.currentTarget;
+              if (img.naturalWidth > 0) {
+                setAspectRatio(img.naturalHeight / img.naturalWidth);
+              }
+            }}
+          />
+        </div>
       </div>
     </div>
   );

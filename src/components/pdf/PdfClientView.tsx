@@ -11,11 +11,9 @@ import {
   quantizeRenderWidthPx,
   useFitDocumentWidth,
 } from "@/lib/documents/zoomable-document";
+import { computePdfDevicePixelRatio } from "@/lib/documents/pdf-render-quality";
 
 pdfjs.GlobalWorkerOptions.workerSrc = `https://unpkg.com/pdfjs-dist@${pdfjs.version}/build/pdf.worker.min.mjs`;
-
-const SHARPNESS_BOOST = 1.28;
-const MAX_PDF_DPR = 4;
 
 type Props = {
   fileUrl: string;
@@ -42,9 +40,12 @@ export function PdfClientView({
   const renderKey = quantizeRenderWidthPx(renderWidth);
   const sharpening = isDocumentSharpening(viewportScale, committedScale);
 
-  const baseDpr =
-    typeof window !== "undefined" ? Math.min(window.devicePixelRatio || 1, 3) : 1;
-  const pdfDevicePixelRatio = Math.min(MAX_PDF_DPR, Math.max(1.35, baseDpr * SHARPNESS_BOOST));
+  const windowDpr = typeof window !== "undefined" ? window.devicePixelRatio || 1 : 1;
+  const pdfDevicePixelRatio = computePdfDevicePixelRatio(
+    committedScale,
+    viewportScale,
+    windowDpr,
+  );
 
   const file = useMemo(() => ({ url: fileUrl }), [fileUrl]);
 
@@ -77,7 +78,7 @@ export function PdfClientView({
             error={<p className="p-4 text-sm text-red-600">{t("pdf.error")}</p>}
           >
             <Page
-              key={`${pageNumber}-${renderKey}`}
+              key={`${pageNumber}-${renderKey}-${Math.round(pdfDevicePixelRatio * 10)}`}
               pageNumber={pageNumber}
               width={renderWidth}
               devicePixelRatio={pdfDevicePixelRatio}

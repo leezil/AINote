@@ -44,7 +44,7 @@ type PinchSession = {
 
 /**
  * PDF/이미지 영역에 CSS transform 기반 확대·축소·이동.
- * `navigationMode`일 때만 포인터 패닝·핀치(필기 모드와 분리).
+ * `navigationMode`일 때 포인터(마우스) 패닝·핀치. 터치 패닝·핀치는 InkOverlay→touchBridge.
  */
 export function ZoomPanSurface({
   children,
@@ -70,6 +70,8 @@ export function ZoomPanSurface({
   const touchDragRef = useRef<{ origX: number; origY: number; sx: number; sy: number } | null>(null);
   const pinchTouchRef = useRef<{ d0: number; s0: number } | null>(null);
   const viewportRef = useRef<HTMLDivElement | null>(null);
+  const transformLayerRef = useRef<HTMLDivElement | null>(null);
+  const prevRasterCommitRef = useRef(rasterCommitScale);
   const pointers = useRef<Map<number, ReactPointerEvent<HTMLDivElement>>>(new Map());
   const pinchSession = useRef<PinchSession | null>(null);
   const panDrag = useRef<{ x: number; y: number; px: number; py: number } | null>(null);
@@ -87,6 +89,37 @@ export function ZoomPanSurface({
   }, [onScaleSettled]);
 
   const cssScaleFactor = scale / Math.max(0.01, rasterCommitScale);
+
+  const applyZoomAtClient = useCallback(
+    (newScale: number, clientX: number, clientY: number) => {
+      const layer = transformLayerRef.current;
+      const next = clampScale(newScale);
+      const old = scaleRef.current;
+      if (!layer) {
+        setScale(next);
+        return;
+      }
+      const ratio = next / old;
+      if (Math.abs(ratio - 1) < 0.0001) return;
+
+      const rect = layer.getBoundingClientRect();
+      const fx = clientX - (rect.left + rect.width / 2);
+      const fy = clientY - (rect.top + rect.height / 2);
+
+      setPan((p) => ({
+        x: p.x + fx * (1 - ratio),
+        y: p.y + fy * (1 - ratio),
+      }));
+      setScale(next);
+    },
+    [clampScale],
+  );
+
+  const viewportCenterClient = useCallback((): { x: number; y: number } => {
+    const vp = viewportRef.current?.getBoundingClientRect();
+    if (!vp) return { x: 0, y: 0 };
+    return { x: vp.left + vp.width / 2, y: vp.top + vp.height / 2 };
+  }, []);
 
   const reset = useCallback(() => {
     setScale(1);
@@ -148,6 +181,30 @@ export function ZoomPanSurface({
     pinchTouchRef.current = null;
   }, [panResetKey]);
 
+  /** 선명도 커밋 시 레이아웃이 바뀌어도 화면 중앙이 튀지 않도록 패닝 보정 */
+  useLayoutEffect(() => {
+    const prev = prevRasterCommitRef.current;
+    const next = rasterCommitScale;
+    prevRasterCommitRef.current = next;
+    if (Math.abs(next - prev) < 0.02) return;
+
+    const layer = transformLayerRef.current;
+    if (!layer) return;
+
+    const cssRatio = prev / next;
+    if (Math.abs(cssRatio - 1) < 0.02) return;
+
+    const { x: vcx, y: vcy } = viewportCenterClient();
+    const rect = layer.getBoundingClientRect();
+    const fx = vcx - (rect.left + rect.width / 2);
+    const fy = vcy - (rect.top + rect.height / 2);
+
+    setPan((p) => ({
+      x: p.x + fx * (1 - cssRatio),
+      y: p.y + fy * (1 - cssRatio),
+    }));
+  }, [rasterCommitScale, viewportCenterClient]);
+
   useEffect(() => {
     if (!touchBridgeRef) return;
     const bridge: ZoomPanTouchBridge = {
@@ -166,13 +223,13 @@ export function ZoomPanSurface({
       endTouchPan() {
         touchDragRef.current = null;
       },
-      beginPinch(d0: number) {
+      beginPinch(d0: number, _centerX: number, _centerY: number) {
         pinchTouchRef.current = { d0, s0: scaleRef.current };
       },
-      updatePinch(d1: number) {
+      updatePinch(d1: number, centerX: number, centerY: number) {
         const p = pinchTouchRef.current;
         if (!p || p.d0 < 8 || d1 < 8) return;
-        setScale(clampScale(p.s0 * (d1 / p.d0)));
+        applyZoomAtClient(clampScale(p.s0 * (d1 / p.d0)), centerX, centerY);
       },
       endPinch() {
         pinchTouchRef.current = null;
@@ -183,7 +240,7 @@ export function ZoomPanSurface({
     return () => {
       touchBridgeRef.current = null;
     };
-  }, [touchBridgeRef, clampScale, notifyScaleSettled]);
+  }, [touchBridgeRef, clampScale, notifyScaleSettled, applyZoomAtClient]);
 
   useEffect(() => {
     const el = viewportRef.current;
@@ -201,18 +258,13 @@ export function ZoomPanSurface({
         return;
       }
       e.preventDefault();
-      const mx = e.clientX - r.left - r.width / 2;
-      const my = e.clientY - r.top - r.height / 2;
       const delta = -e.deltaY;
-      setScale((prevS) => {
-        const next = clampScale(prevS * (1 + (delta > 0 ? WHEEL_SCALE_STEP : -WHEEL_SCALE_STEP)));
-        const ratio = next / prevS;
-        setPan((p) => ({
-          x: mx + (p.x - mx) * ratio,
-          y: my + (p.y - my) * ratio,
-        }));
-        return next;
-      });
+      const { x: cx, y: cy } = viewportCenterClient();
+      applyZoomAtClient(
+        clampScale(scaleRef.current * (1 + (delta > 0 ? WHEEL_SCALE_STEP : -WHEEL_SCALE_STEP))),
+        cx,
+        cy,
+      );
       if (wheelSettleTimerRef.current != null) {
         clearTimeout(wheelSettleTimerRef.current);
       }
@@ -228,7 +280,7 @@ export function ZoomPanSurface({
         clearTimeout(wheelSettleTimerRef.current);
       }
     };
-  }, [clampScale, notifyScaleSettled]);
+  }, [clampScale, notifyScaleSettled, applyZoomAtClient, viewportCenterClient]);
 
   const distance = (a: ReactPointerEvent<HTMLDivElement>, b: ReactPointerEvent<HTMLDivElement>) =>
     Math.hypot(a.clientX - b.clientX, a.clientY - b.clientY);
@@ -263,7 +315,9 @@ export function ZoomPanSurface({
       const d1 = distance(a, b);
       const ps = pinchSession.current;
       if (d1 > 8 && ps.d0 > 8) {
-        setScale(clampScale(ps.s0 * (d1 / ps.d0)));
+        const cx = (a.clientX + b.clientX) / 2;
+        const cy = (a.clientY + b.clientY) / 2;
+        applyZoomAtClient(clampScale(ps.s0 * (d1 / ps.d0)), cx, cy);
       }
       panDrag.current = null;
     } else if (list.length === 1) {
@@ -340,7 +394,10 @@ export function ZoomPanSurface({
           type="button"
           className="pointer-events-auto select-none rounded-md border border-zinc-300 bg-white/95 px-2 py-1 text-sm shadow dark:border-zinc-600 dark:bg-zinc-900/95"
           onPointerDown={ignorePenUi}
-          onClick={() => setScale((s) => clampScale(s * 1.22))}
+          onClick={() => {
+            const { x, y } = viewportCenterClient();
+            applyZoomAtClient(clampScale(scaleRef.current * 1.22), x, y);
+          }}
         >
           +
         </button>
@@ -348,7 +405,10 @@ export function ZoomPanSurface({
           type="button"
           className="pointer-events-auto select-none rounded-md border border-zinc-300 bg-white/95 px-2 py-1 text-sm shadow dark:border-zinc-600 dark:bg-zinc-900/95"
           onPointerDown={ignorePenUi}
-          onClick={() => setScale((s) => clampScale(s / 1.22))}
+          onClick={() => {
+            const { x, y } = viewportCenterClient();
+            applyZoomAtClient(clampScale(scaleRef.current / 1.22), x, y);
+          }}
         >
           −
         </button>
@@ -365,10 +425,11 @@ export function ZoomPanSurface({
       <div
         className={[
           "relative flex h-full min-h-0 w-full touch-none",
-          stretchContent ? "items-stretch justify-center" : "items-start justify-center",
+          stretchContent ? "items-stretch justify-center" : "items-center justify-center",
         ].join(" ")}
       >
         <div
+          ref={transformLayerRef}
           className={[
             "will-change-transform max-h-full max-w-full min-h-0",
             stretchContent

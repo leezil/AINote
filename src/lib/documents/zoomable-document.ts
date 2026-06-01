@@ -4,8 +4,8 @@ import { useZoomPanViewportWidth } from "@/components/workspace/ZoomPanViewportW
 export const MIN_ZOOM_SCALE = 0.22;
 export const MAX_ZOOM_SCALE = 10;
 export const MAX_DOCUMENT_RENDER_PX = 12_000;
-/** Page/이미지 재렌더 키 안정화 (px 단위 양자화) */
-export const RENDER_WIDTH_QUANTUM = 16;
+/** Page/이미지 재렌더 키 안정화 (px 단위 양자화, 작을수록 단계가 촘촘) */
+export const RENDER_WIDTH_QUANTUM = 8;
 
 export function clampZoomScale(s: number): number {
   return Math.max(MIN_ZOOM_SCALE, Math.min(MAX_ZOOM_SCALE, s));
@@ -26,7 +26,7 @@ export function isDocumentSharpening(
   viewportScale: number,
   committedScale: number,
 ): boolean {
-  return Math.abs(clampZoomScale(viewportScale) - clampZoomScale(committedScale)) > 0.06;
+  return Math.abs(clampZoomScale(viewportScale) - clampZoomScale(committedScale)) > 0.05;
 }
 
 type FitWidthOptions = {

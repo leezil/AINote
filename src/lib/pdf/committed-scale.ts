@@ -2,8 +2,10 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { clampZoomScale } from "@/lib/documents/zoomable-document";
 
 /** 핀치·휠 중 CSS만 움직이고, 멈춘 뒤 PDF를 이 배율로 다시 그립니다. */
-export const PDF_RASTER_COMMIT_MS = 220;
-const COMMIT_EPSILON = 0.025;
+export const PDF_RASTER_COMMIT_MS =
+  typeof window !== "undefined" && "ontouchstart" in window ? 150 : 220;
+const COMMIT_EPSILON =
+  typeof window !== "undefined" && "ontouchstart" in window ? 0.02 : 0.025;
 
 /**
  * 제스처 배율(zoom)과 래스터에 굳힌 배율(committed)을 분리합니다.

@@ -14,6 +14,11 @@ import type { StoredDocumentMeta } from "@/lib/storage/document-store";
 import type { AskRequest } from "@/lib/ai/ask-schema";
 import { inferPdfMaterialIntentFromQuestion } from "@/lib/ai/scope-intent";
 import { fetchUploadConfig, uploadDocumentFile } from "@/lib/documents/upload-client";
+import {
+  effectiveAllowFingerInk,
+  isTabletPenOnlyProfile,
+  useInkInputProfile,
+} from "@/lib/device/ink-input-profile";
 import { useCommittedPdfScale } from "@/lib/pdf/committed-scale";
 import { inkDebugLog, readInkDebugFlag } from "@/lib/inkDebug";
 import { InkOverlay, type InkOverlayHandle, type ZoomPanTouchBridge } from "@/components/ink/InkOverlay";
@@ -68,10 +73,11 @@ export function WorkspaceApp() {
   const [error, setError] = useState<string | null>(null);
   /** 문서 뷰어 전체화면 + md */
   const [viewerFullscreen, setViewerFullscreen] = useState(false);
-  /** true: 필기 / false: 이동·확대(손가락은 Ink→touchBridge로 패닝) */
-  const [gestureInk, setGestureInk] = useState(true);
+  const inkInputProfile = useInkInputProfile();
+  const tabletPenOnly = isTabletPenOnlyProfile(inkInputProfile);
   const [penTool, setPenTool] = useState<PenTool>("ink");
-  const [allowFingerInk, setAllowFingerInk] = useState(false);
+  const [allowFingerInkPref, setAllowFingerInkPref] = useState(false);
+  const allowFingerInk = effectiveAllowFingerInk(inkInputProfile, allowFingerInkPref);
   /** 세로 뷰포트(상하 스택): AI를 아래(기본) 또는 위 */
   const [aiLandscapeStack, setAiLandscapeStack] = useState<AiLandscapeStack>("bottom");
   /** 가로 뷰포트(좌우 분할): AI를 오른쪽(기본) 또는 왼쪽 */
@@ -93,7 +99,7 @@ export function WorkspaceApp() {
   const touchPanBridgeRef = useRef<ZoomPanTouchBridge | null>(null);
 
   const inkLayerActive = Boolean(activeId);
-  const inkPointerActive = inkLayerActive && gestureInk;
+  const inkPointerActive = inkLayerActive;
   const viewportPdfScale = zoomScale;
 
   useEffect(() => {
@@ -101,19 +107,16 @@ export function WorkspaceApp() {
     inkDebugLog("workspace-ink-state", {
       activeId,
       inkLayerActive,
-      gestureInk,
+      inkInputProfile,
+      tabletPenOnly,
       inkPointerActive,
       allowFingerInk,
       penTool,
       hint: inkPointerActive
         ? "InkOverlay: pointer-events-auto (이벤트 도달 가능)"
-        : !inkLayerActive
-          ? "문서 미선택 → 잉크 레이어 비활성"
-          : !gestureInk
-            ? "이동·확대 모드 → 잉크 캔버스 pointer-events-none"
-            : "상태 확인 필요",
+        : "문서 미선택 → 잉크 레이어 비활성",
     });
-  }, [activeId, inkLayerActive, gestureInk, inkPointerActive, allowFingerInk, penTool]);
+  }, [activeId, inkLayerActive, inkInputProfile, tabletPenOnly, inkPointerActive, allowFingerInk, penTool]);
 
   /** 콘솔에서 `__AINOTE_INK_DEBUG__`만 켠 경우에도 안내(로그는 pointer 이벤트 때만 쌓임) */
   useEffect(() => {
@@ -304,14 +307,6 @@ export function WorkspaceApp() {
       detachAiResizeListeners();
     };
   }, [detachAiResizeListeners]);
-
-  useEffect(() => {
-    if (!gestureInk) return;
-    const id = requestAnimationFrame(() => {
-      inkRef.current?.syncLayout();
-    });
-    return () => cancelAnimationFrame(id);
-  }, [gestureInk]);
 
   const workspaceHeaders = useMemo(
     () => ({ "x-workspace-id": defaultWorkspaceId }),
@@ -619,7 +614,7 @@ export function WorkspaceApp() {
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (!activeId || !gestureInk || !inkLayerActive) return;
+      if (!activeId || !inkLayerActive) return;
       const target = e.target as HTMLElement | null;
       if (target?.closest('textarea, input, select, [contenteditable="true"]')) return;
 
@@ -638,7 +633,7 @@ export function WorkspaceApp() {
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [activeId, gestureInk, inkLayerActive]);
+  }, [activeId, inkLayerActive]);
 
   /** 필기 모드에서 빠른 연속 획 후 텍스트(사이드바·헤더 등)로 선택이 넘어가는 것 방지 */
   useEffect(() => {
@@ -785,30 +780,11 @@ export function WorkspaceApp() {
               </span>
             )}
             <div className="ml-auto flex flex-wrap items-center justify-end gap-2">
-              <button
-                type="button"
-                className={[
-                  "rounded-md border px-2 py-1 text-sm",
-                  !gestureInk
-                    ? "border-zinc-900 bg-zinc-900 text-white dark:border-zinc-100 dark:bg-zinc-100 dark:text-zinc-900"
-                    : "border-zinc-200 dark:border-zinc-700",
-                ].join(" ")}
-                onClick={() => setGestureInk(false)}
-              >
-                {t("workspace.modeNav")}
-              </button>
-              <button
-                type="button"
-                className={[
-                  "rounded-md border px-2 py-1 text-sm",
-                  gestureInk
-                    ? "border-zinc-900 bg-zinc-900 text-white dark:border-zinc-100 dark:bg-zinc-100 dark:text-zinc-900"
-                    : "border-zinc-200 dark:border-zinc-700",
-                ].join(" ")}
-                onClick={() => setGestureInk(true)}
-              >
-                {t("workspace.modeInk")}
-              </button>
+              {tabletPenOnly ? (
+                <span className="hidden text-xs text-zinc-500 sm:inline dark:text-zinc-400">
+                  {t("workspace.tabletInkHint")}
+                </span>
+              ) : null}
               <button
                 type="button"
                 className={[
@@ -904,13 +880,13 @@ export function WorkspaceApp() {
               >
                 {t("workspace.clearAllInk")}
               </button>
-              {gestureInk ? (
+              {!tabletPenOnly && inkLayerActive ? (
                 <label className="flex cursor-pointer items-center gap-1.5 text-xs text-zinc-600 dark:text-zinc-400">
                   <input
                     type="checkbox"
                     className="rounded border-zinc-300 dark:border-zinc-600"
-                    checked={allowFingerInk}
-                    onChange={(e) => setAllowFingerInk(e.target.checked)}
+                    checked={allowFingerInkPref}
+                    onChange={(e) => setAllowFingerInkPref(e.target.checked)}
                   />
                   {t("workspace.fingerInk")}
                 </label>
@@ -954,7 +930,7 @@ export function WorkspaceApp() {
               <p className="p-6 text-sm text-zinc-500">{t("workspace.pickDocHint")}</p>
             ) : (
               <ZoomPanSurface
-                navigationMode={!gestureInk}
+                navigationMode={false}
                 className={viewerFullscreen ? "h-full min-h-0" : "min-h-[320px]"}
                 initialScale={zoomScale}
                 rasterCommitScale={committedScale}
@@ -1073,6 +1049,7 @@ export function WorkspaceApp() {
                         remoteInk={inkRemote}
                         onInkHistoryChange={bumpInkHistory}
                         allowFingerInk={allowFingerInk}
+                        tabletPenOnly={tabletPenOnly}
                         touchPanBridge={touchPanBridgeRef}
                         tool={penTool === "erase" ? "erase" : "draw"}
                         strokeColor={inkColor}
