@@ -16,6 +16,11 @@ import {
   isLikelyStylusAsTouch,
   readInkDebugFlag,
 } from "@/lib/inkDebug";
+import {
+  ensureNormalizedStrokes,
+  strokeWidthNorm,
+  strokeWidthPx,
+} from "@/lib/ink/coord-space";
 
 export type ZoomPanTouchBridge = {
   beginTouchPan: (clientX: number, clientY: number) => void;
@@ -96,21 +101,43 @@ function pointSegmentDistance(
   return Math.hypot(px - nx, py - ny);
 }
 
-function strokeHitByEraser(stroke: Stroke, px: number, py: number, eraserR: number): boolean {
-  const pad = stroke.width / 2 + eraserR;
+function strokeHitByEraser(
+  stroke: Stroke,
+  px: number,
+  py: number,
+  eraserR: number,
+  contentW: number,
+  contentH: number,
+): boolean {
+  const lineW = strokeWidthPx(stroke.width, contentW);
+  const pad = lineW / 2 + eraserR;
   for (const p of stroke.points) {
-    if (Math.hypot(px - p.x, py - p.y) <= pad) return true;
+    const sx = p.x * contentW;
+    const sy = p.y * contentH;
+    if (Math.hypot(px - sx, py - sy) <= pad) return true;
   }
   for (let i = 1; i < stroke.points.length; i++) {
     const a = stroke.points[i - 1];
     const b = stroke.points[i];
-    if (pointSegmentDistance(px, py, a.x, a.y, b.x, b.y) <= pad) return true;
+    if (
+      pointSegmentDistance(px, py, a.x * contentW, a.y * contentH, b.x * contentW, b.y * contentH) <=
+      pad
+    ) {
+      return true;
+    }
   }
   return false;
 }
 
-function eraseStrokesAt(strokes: Stroke[], px: number, py: number, eraserR: number): Stroke[] {
-  return strokes.filter((s) => !strokeHitByEraser(s, px, py, eraserR));
+function eraseStrokesAt(
+  strokes: Stroke[],
+  px: number,
+  py: number,
+  eraserR: number,
+  contentW: number,
+  contentH: number,
+): Stroke[] {
+  return strokes.filter((s) => !strokeHitByEraser(s, px, py, eraserR, contentW, contentH));
 }
 
 const MAX_INK_UNDO = 64;
@@ -125,6 +152,43 @@ function cloneStrokes(s: Stroke[]): Stroke[] {
 
 function trimStack<T>(arr: T[], max: number) {
   while (arr.length > max) arr.shift();
+}
+
+const INK_CONTENT_SELECTOR = "[data-ink-document-content]";
+
+function getInkContentEl(canvas: HTMLCanvasElement | null): HTMLElement | null {
+  if (!canvas) return null;
+  return canvas.closest(INK_CONTENT_SELECTOR) as HTMLElement | null;
+}
+
+function readContentSize(canvas: HTMLCanvasElement | null): { w: number; h: number } {
+  const el = getInkContentEl(canvas);
+  if (!el) return { w: 1, h: 1 };
+  return {
+    w: Math.max(1, Math.round(el.clientWidth)),
+    h: Math.max(1, Math.round(el.clientHeight)),
+  };
+}
+
+function applyLoadedStrokes(canvas: HTMLCanvasElement | null, raw: Stroke[]): Stroke[] {
+  const { w, h } = readContentSize(canvas);
+  return ensureNormalizedStrokes(raw, w, h);
+}
+
+function scheduleApplyLoadedStrokes(
+  canvas: HTMLCanvasElement | null,
+  raw: Stroke[],
+  onApplied: (strokes: Stroke[]) => void,
+) {
+  const attempt = (triesLeft: number) => {
+    const { w, h } = readContentSize(canvas);
+    if ((w < 32 || h < 32) && triesLeft > 0) {
+      requestAnimationFrame(() => attempt(triesLeft - 1));
+      return;
+    }
+    onApplied(applyLoadedStrokes(canvas, raw));
+  };
+  requestAnimationFrame(() => attempt(8));
 }
 
 function coalescedClientPoints(
@@ -192,47 +256,51 @@ export const InkOverlay = forwardRef<InkOverlayHandle, Props>(function InkOverla
     if (!canvas) return;
     const ctx = canvas.getContext("2d");
     if (!ctx) return;
+    const cw = lastAllocRef.current.cssW || readContentSize(canvas).w;
+    const ch = lastAllocRef.current.cssH || readContentSize(canvas).h;
     ctx.clearRect(0, 0, canvas.width, canvas.height);
     for (const s of strokesRef.current) {
       if (s.points.length === 0) continue;
+      const lineW = strokeWidthPx(s.width, cw);
       if (s.points.length === 1) {
         const p = s.points[0];
-        const r = Math.max(0.6, s.width / 2);
+        const r = Math.max(0.6, lineW / 2);
         ctx.fillStyle = s.color;
         ctx.beginPath();
-        ctx.arc(p.x, p.y, r, 0, Math.PI * 2);
+        ctx.arc(p.x * cw, p.y * ch, r, 0, Math.PI * 2);
         ctx.fill();
         continue;
       }
       ctx.strokeStyle = s.color;
-      ctx.lineWidth = s.width;
+      ctx.lineWidth = lineW;
       ctx.lineCap = "round";
       ctx.lineJoin = "round";
       ctx.beginPath();
-      ctx.moveTo(s.points[0].x, s.points[0].y);
+      ctx.moveTo(s.points[0].x * cw, s.points[0].y * ch);
       for (let i = 1; i < s.points.length; i++) {
-        ctx.lineTo(s.points[i].x, s.points[i].y);
+        ctx.lineTo(s.points[i].x * cw, s.points[i].y * ch);
       }
       ctx.stroke();
     }
     if (currentRef.current) {
       const s = currentRef.current;
+      const lineW = strokeWidthPx(s.width, cw);
       if (s.points.length === 1) {
         const p = s.points[0];
-        const r = Math.max(0.6, s.width / 2);
+        const r = Math.max(0.6, lineW / 2);
         ctx.fillStyle = s.color;
         ctx.beginPath();
-        ctx.arc(p.x, p.y, r, 0, Math.PI * 2);
+        ctx.arc(p.x * cw, p.y * ch, r, 0, Math.PI * 2);
         ctx.fill();
       } else if (s.points.length >= 2) {
         ctx.strokeStyle = s.color;
-        ctx.lineWidth = s.width;
+        ctx.lineWidth = lineW;
         ctx.lineCap = "round";
         ctx.lineJoin = "round";
         ctx.beginPath();
-        ctx.moveTo(s.points[0].x, s.points[0].y);
+        ctx.moveTo(s.points[0].x * cw, s.points[0].y * ch);
         for (let i = 1; i < s.points.length; i++) {
-          ctx.lineTo(s.points[i].x, s.points[i].y);
+          ctx.lineTo(s.points[i].x * cw, s.points[i].y * ch);
         }
         ctx.stroke();
       }
@@ -244,7 +312,7 @@ export const InkOverlay = forwardRef<InkOverlayHandle, Props>(function InkOverla
       ctx.strokeStyle = "rgba(71, 85, 105, 0.75)";
       ctx.lineWidth = 1.5;
       ctx.beginPath();
-      ctx.arc(x, y, eraserRadius, 0, Math.PI * 2);
+      ctx.arc(x * cw, y * ch, eraserRadius, 0, Math.PI * 2);
       ctx.fill();
       ctx.stroke();
       ctx.restore();
@@ -371,7 +439,18 @@ export const InkOverlay = forwardRef<InkOverlayHandle, Props>(function InkOverla
         const raw = localStorage.getItem(storageKey);
         if (raw) {
           const parsed = JSON.parse(raw) as Stroke[];
-          if (Array.isArray(parsed)) strokesRef.current = parsed;
+          if (Array.isArray(parsed)) {
+            scheduleApplyLoadedStrokes(canvasRef.current, parsed, (strokes) => {
+              if (gen !== inkLoadGenRef.current) return;
+              strokesRef.current = strokes;
+              bump((n) => n + 1);
+              queueMicrotask(() => {
+                redrawRef.current();
+              });
+              notifyInkHistory();
+            });
+            return;
+          }
         }
       } catch {
         strokesRef.current = [];
@@ -380,11 +459,13 @@ export const InkOverlay = forwardRef<InkOverlayHandle, Props>(function InkOverla
 
     if (!remote) {
       applyLocalFallback();
-      bump((n) => n + 1);
-      queueMicrotask(() => {
-        redrawRef.current();
-      });
-      notifyInkHistory();
+      if (strokesRef.current.length === 0) {
+        bump((n) => n + 1);
+        queueMicrotask(() => {
+          redrawRef.current();
+        });
+        notifyInkHistory();
+      }
       return () => {
         if (remoteSaveTimerRef.current != null) {
           clearTimeout(remoteSaveTimerRef.current);
@@ -406,17 +487,20 @@ export const InkOverlay = forwardRef<InkOverlayHandle, Props>(function InkOverla
           const data = (await res.json()) as { strokes?: unknown };
           const arr = data.strokes;
           if (Array.isArray(arr)) {
-            strokesRef.current = arr as Stroke[];
-            try {
-              localStorage.setItem(storageKey, JSON.stringify(strokesRef.current));
-            } catch {
-              // ignore
-            }
-            bump((n) => n + 1);
-            queueMicrotask(() => {
-              redrawRef.current();
+            scheduleApplyLoadedStrokes(canvasRef.current, arr as Stroke[], (strokes) => {
+              if (cancelled || gen !== inkLoadGenRef.current) return;
+              strokesRef.current = strokes;
+              try {
+                localStorage.setItem(storageKey, JSON.stringify(strokesRef.current));
+              } catch {
+                // ignore
+              }
+              bump((n) => n + 1);
+              queueMicrotask(() => {
+                redrawRef.current();
+              });
+              notifyInkHistory();
             });
-            notifyInkHistory();
             return;
           }
         }
@@ -425,11 +509,13 @@ export const InkOverlay = forwardRef<InkOverlayHandle, Props>(function InkOverla
       }
       if (cancelled || gen !== inkLoadGenRef.current) return;
       applyLocalFallback();
-      bump((n) => n + 1);
-      queueMicrotask(() => {
-        redrawRef.current();
-      });
-      notifyInkHistory();
+      if (strokesRef.current.length === 0) {
+        bump((n) => n + 1);
+        queueMicrotask(() => {
+          redrawRef.current();
+        });
+        notifyInkHistory();
+      }
     })();
 
     return () => {
@@ -445,7 +531,7 @@ export const InkOverlay = forwardRef<InkOverlayHandle, Props>(function InkOverla
   const resizeToContainer = useCallback(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
-    const surface = canvas.closest("[data-zoom-document-surface]") as HTMLElement | null;
+    const surface = getInkContentEl(canvas);
     let w: number;
     let h: number;
     if (surface) {
@@ -506,7 +592,7 @@ export const InkOverlay = forwardRef<InkOverlayHandle, Props>(function InkOverla
         resizeToContainer();
       });
     });
-    const surface = canvasRef.current?.closest("[data-zoom-document-surface]") as HTMLElement | null;
+    const surface = getInkContentEl(canvasRef.current);
     const roTarget = surface ?? canvasRef.current?.parentElement;
     if (roTarget) ro.observe(roTarget);
     return () => {
@@ -576,16 +662,17 @@ export const InkOverlay = forwardRef<InkOverlayHandle, Props>(function InkOverla
   const clientPointFromClient = useCallback((clientX: number, clientY: number): Point => {
     const canvas = canvasRef.current;
     if (!canvas) return { x: 0, y: 0 };
-    const surface = canvas.closest("[data-zoom-document-surface]") as HTMLElement | null;
-    if (surface) {
-      const sr = surface.getBoundingClientRect();
-      const sw = Math.max(1, surface.clientWidth);
-      const sh = Math.max(1, surface.clientHeight);
+    const content = getInkContentEl(canvas);
+    if (content) {
+      const sr = content.getBoundingClientRect();
       if (sr.width <= 0 || sr.height <= 0) return { x: 0, y: 0 };
-      const x = ((clientX - sr.left) / sr.width) * sw;
-      const y = ((clientY - sr.top) / sr.height) * sh;
+      const x = (clientX - sr.left) / sr.width;
+      const y = (clientY - sr.top) / sr.height;
       if (!Number.isFinite(x) || !Number.isFinite(y)) return { x: 0, y: 0 };
-      return { x, y };
+      return {
+        x: Math.max(0, Math.min(1, x)),
+        y: Math.max(0, Math.min(1, y)),
+      };
     }
     const rect = canvas.getBoundingClientRect();
     const cw = canvas.clientWidth;
@@ -613,8 +700,16 @@ export const InkOverlay = forwardRef<InkOverlayHandle, Props>(function InkOverla
           eraseGestureUndoPushedRef.current = false;
           const p = clientPointFromClient(e.clientX, e.clientY);
           eraserHoverRef.current = p;
+          const { w, h } = readContentSize(canvasRef.current);
           const before = cloneStrokes(strokesRef.current);
-          const next = eraseStrokesAt(strokesRef.current, p.x, p.y, eraserRadius);
+          const next = eraseStrokesAt(
+            strokesRef.current,
+            p.x * w,
+            p.y * h,
+            eraserRadius,
+            w,
+            h,
+          );
           if (next.length !== strokesRef.current.length) {
             if (!eraseGestureUndoPushedRef.current) {
               pushUndoSnapshot(before);
@@ -628,9 +723,10 @@ export const InkOverlay = forwardRef<InkOverlayHandle, Props>(function InkOverla
         }
 
         eraserHoverRef.current = null;
+        const { w } = readContentSize(canvasRef.current);
         currentRef.current = {
           color: strokeColor,
-          width: strokeWidth,
+          width: strokeWidthNorm(strokeWidth, w),
           points: [clientPointFromClient(e.clientX, e.clientY)],
         };
         flushInkRedraw();
@@ -795,12 +891,20 @@ export const InkOverlay = forwardRef<InkOverlayHandle, Props>(function InkOverla
 
       if (tool === "erase") {
         eraserHoverRef.current = clientPointFromClient(e.clientX, e.clientY);
+        const { w, h } = readContentSize(canvasRef.current);
         const list = coalescedClientPoints(e);
         let changed = false;
         for (const ev of list) {
           const p = clientPointFromClient(ev.clientX, ev.clientY);
           const before = cloneStrokes(strokesRef.current);
-          const next = eraseStrokesAt(strokesRef.current, p.x, p.y, eraserRadius);
+          const next = eraseStrokesAt(
+            strokesRef.current,
+            p.x * w,
+            p.y * h,
+            eraserRadius,
+            w,
+            h,
+          );
           if (next.length !== strokesRef.current.length) {
             if (!eraseGestureUndoPushedRef.current) {
               pushUndoSnapshot(before);
@@ -817,8 +921,9 @@ export const InkOverlay = forwardRef<InkOverlayHandle, Props>(function InkOverla
 
       if (!currentRef.current) return;
 
-      /** 연속 점 최소 간격(CSS px). 크면 샘플이 듬성해져 필기가 끊겨 보임 */
-      const minDist = Math.max(0.012, Math.min(0.38, strokeWidth * 0.024));
+      /** 연속 점 최소 간격(정규화). 크면 샘플이 듬성해져 필기가 끊겨 보임 */
+      const { w } = readContentSize(canvasRef.current);
+      const minDist = Math.max(0.000012, Math.min(0.0005, strokeWidthNorm(strokeWidth, w) * 0.024));
       const list = coalescedClientPoints(e);
       const pts = currentRef.current.points;
       for (const ev of list) {

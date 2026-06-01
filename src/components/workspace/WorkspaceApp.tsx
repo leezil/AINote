@@ -393,6 +393,33 @@ export function WorkspaceApp() {
 
   const currentPage = activeId ? pageByDoc[activeId] ?? 1 : 1;
 
+  /** 전체화면·AI 패널·뷰포트 변경 후 필기 캔버스를 문서 크기에 다시 맞춤 */
+  useEffect(() => {
+    if (!activeId) return;
+    let raf1 = 0;
+    let raf2 = 0;
+    raf1 = requestAnimationFrame(() => {
+      raf2 = requestAnimationFrame(() => {
+        inkRef.current?.syncLayout();
+      });
+    });
+    return () => {
+      cancelAnimationFrame(raf1);
+      cancelAnimationFrame(raf2);
+    };
+  }, [
+    activeId,
+    viewerFullscreen,
+    fullscreenAiOpen,
+    aiPanelWidthPx,
+    aiPanelSide,
+    aiLandscapeStack,
+    isMdUp,
+    layoutViewport.w,
+    layoutViewport.h,
+    currentPage,
+  ]);
+
   const setPage = (p: number) => {
     if (!activeId) return;
     setPageByDoc((prev) => ({ ...prev, [activeId]: p }));
@@ -950,99 +977,104 @@ export function WorkspaceApp() {
                     "relative isolate mx-auto max-w-full",
                     activeMeta.kind === "pdf" ? "ainote-no-select" : "",
                     viewerFullscreen
-                      ? "flex min-h-0 w-max max-w-full max-h-full flex-col"
-                      : "min-h-[480px] w-max",
+                      ? "flex min-h-0 w-max max-w-full max-h-full flex-col items-center"
+                      : "w-max",
                   ]
                     .filter(Boolean)
                     .join(" ")}
                 >
-                  {activeMeta.kind === "pdf" ? (
-                    <div
-                      className={
-                        viewerFullscreen && inkLayerActive
-                          ? "relative z-0 flex max-h-full min-h-0 justify-center overflow-auto"
-                          : "relative z-0"
-                      }
-                    >
-                      <div
-                        className={
-                          inkPointerActive
-                            ? "pointer-events-none [&_*]:pointer-events-none"
-                            : undefined
-                        }
-                      >
-                        <PdfClientView
-                          key={activeMeta.id}
-                          fileUrl={fileUrl}
-                          pageNumber={currentPage}
-                          maxWidthPx={viewerFullscreen ? 8192 : 1280}
-                          wideMode={viewerFullscreen}
-                          viewportScale={viewportPdfScale}
-                          onPdfLoaded={(n) => {
-                            setPdfNumPagesByDoc((prev) => ({
-                              ...prev,
-                              [activeMeta.id]: n,
-                            }));
-                            setPageByDoc((prev) => {
-                              const cur = prev[activeMeta.id] ?? 1;
-                              if (cur <= n) return prev;
-                              return { ...prev, [activeMeta.id]: n };
-                            });
-                          }}
-                        />
-                      </div>
-                    </div>
-                  ) : activeMeta.kind === "image" ? (
-                    <div
-                      className={[
-                        "relative z-0 flex justify-center p-2",
-                        viewerFullscreen && inkLayerActive ? "max-h-full min-h-0 overflow-auto" : "",
-                      ].join(" ")}
-                    >
-                      <div
-                        className={
-                          inkPointerActive
-                            ? "pointer-events-none [&_*]:pointer-events-none"
-                            : undefined
-                        }
-                      >
-                        <WorkspaceDocImage
-                          fileUrl={fileUrl}
-                          fetchHeaders={workspaceHeaders}
-                          alt={activeMeta.filename}
-                          className="max-h-[85vh] w-auto max-w-none object-contain md:max-h-[90vh]"
-                        />
-                      </div>
-                    </div>
-                  ) : (
-                    <div
-                      className={
-                        inkPointerActive
-                          ? "pointer-events-none [&_*]:pointer-events-none"
-                          : undefined
-                      }
-                    >
-                      <TextPreview fileUrl={fileUrl} fetchHeaders={workspaceHeaders} />
-                    </div>
-                  )}
-                  <InkOverlay
-                    key={inkStorageKey}
-                    ref={inkRef}
-                    storageKey={inkStorageKey}
-                    remoteInk={inkRemote}
-                    onInkHistoryChange={bumpInkHistory}
-                    allowFingerInk={allowFingerInk}
-                    touchPanBridge={touchPanBridgeRef}
-                    tool={penTool === "erase" ? "erase" : "draw"}
-                    strokeColor={inkColor}
-                    strokeWidth={inkWidth}
-                    eraserRadius={eraserRadius}
-                    viewportScale={viewportPdfScale}
+                  <div
                     className={[
-                      "absolute left-0 top-0 z-[50]",
-                      inkPointerActive ? "pointer-events-auto" : "pointer-events-none",
-                    ].join(" ")}
-                  />
+                      viewerFullscreen && inkLayerActive ? "max-h-full min-h-0 overflow-auto" : "",
+                    ]
+                      .filter(Boolean)
+                      .join(" ")}
+                  >
+                    <div
+                      data-ink-document-content
+                      className="relative inline-block max-w-full align-top"
+                    >
+                      {activeMeta.kind === "pdf" ? (
+                        <div
+                          className={
+                            inkPointerActive
+                              ? "pointer-events-none [&_*]:pointer-events-none"
+                              : undefined
+                          }
+                        >
+                          <PdfClientView
+                            key={activeMeta.id}
+                            fileUrl={fileUrl}
+                            pageNumber={currentPage}
+                            maxWidthPx={viewerFullscreen ? 8192 : 1280}
+                            wideMode={viewerFullscreen}
+                            viewportScale={viewportPdfScale}
+                            onPdfLoaded={(n) => {
+                              setPdfNumPagesByDoc((prev) => ({
+                                ...prev,
+                                [activeMeta.id]: n,
+                              }));
+                              setPageByDoc((prev) => {
+                                const cur = prev[activeMeta.id] ?? 1;
+                                if (cur <= n) return prev;
+                                return { ...prev, [activeMeta.id]: n };
+                              });
+                            }}
+                          />
+                        </div>
+                      ) : activeMeta.kind === "image" ? (
+                        <div
+                          className={[
+                            "flex justify-center",
+                            viewerFullscreen ? "p-0" : "p-2",
+                          ].join(" ")}
+                        >
+                          <div
+                            className={
+                              inkPointerActive
+                                ? "pointer-events-none [&_*]:pointer-events-none"
+                                : undefined
+                            }
+                          >
+                            <WorkspaceDocImage
+                              fileUrl={fileUrl}
+                              fetchHeaders={workspaceHeaders}
+                              alt={activeMeta.filename}
+                              className="max-h-[85vh] w-auto max-w-none object-contain md:max-h-[90vh]"
+                            />
+                          </div>
+                        </div>
+                      ) : (
+                        <div
+                          className={
+                            inkPointerActive
+                              ? "pointer-events-none [&_*]:pointer-events-none"
+                              : undefined
+                          }
+                        >
+                          <TextPreview fileUrl={fileUrl} fetchHeaders={workspaceHeaders} />
+                        </div>
+                      )}
+                      <InkOverlay
+                        key={inkStorageKey}
+                        ref={inkRef}
+                        storageKey={inkStorageKey}
+                        remoteInk={inkRemote}
+                        onInkHistoryChange={bumpInkHistory}
+                        allowFingerInk={allowFingerInk}
+                        touchPanBridge={touchPanBridgeRef}
+                        tool={penTool === "erase" ? "erase" : "draw"}
+                        strokeColor={inkColor}
+                        strokeWidth={inkWidth}
+                        eraserRadius={eraserRadius}
+                        viewportScale={viewportPdfScale}
+                        className={[
+                          "absolute inset-0 z-[50]",
+                          inkPointerActive ? "pointer-events-auto" : "pointer-events-none",
+                        ].join(" ")}
+                      />
+                    </div>
+                  </div>
                 </div>
               </ZoomPanSurface>
             )}
