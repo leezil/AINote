@@ -13,6 +13,7 @@ import {
 } from "react";
 import type { ZoomPanTouchBridge } from "@/components/ink/InkOverlay";
 import { ZoomPanViewportWidthContext } from "@/components/workspace/ZoomPanViewportWidthContext";
+import { prefersTouchGestureNavigation } from "@/lib/device/ink-input-profile";
 
 type Props = {
   children: ReactNode;
@@ -258,6 +259,12 @@ export function ZoomPanSurface({
         return;
       }
       e.preventDefault();
+
+      const touchNav = prefersTouchGestureNavigation();
+      if (touchNav && !e.ctrlKey) {
+        return;
+      }
+
       const delta = -e.deltaY;
       const { x: cx, y: cy } = viewportCenterClient();
       applyZoomAtClient(

@@ -56,3 +56,8 @@ export function effectiveAllowFingerInk(
 ): boolean {
   return profile === "desktop" && userWantsFingerInk;
 }
+
+/** 태블릿: 손가락 패닝·핀치만, 휠(한 손 스와이프)로 확대하지 않음 */
+export function prefersTouchGestureNavigation(): boolean {
+  return detectInkInputProfile() === "tablet";
+}

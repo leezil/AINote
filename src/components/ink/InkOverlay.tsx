@@ -216,10 +216,17 @@ function scheduleApplyLoadedStrokes(
 }
 
 const PEN_PALM_REJECT_GRACE_MS_DESKTOP = 120;
-const PEN_PALM_REJECT_GRACE_MS_TABLET = 36;
+/** 두 손가락이 이 거리(px) 이상 떨어져 있을 때만 핀치 확대 */
+const PINCH_MIN_SEPARATION_PX = 44;
 
-function penPalmRejectGraceMs(tabletPenOnly: boolean): number {
-  return tabletPenOnly ? PEN_PALM_REJECT_GRACE_MS_TABLET : PEN_PALM_REJECT_GRACE_MS_DESKTOP;
+function touchSeparationPx(coords: Map<number, { x: number; y: number }>): number {
+  const pts = [...coords.values()];
+  if (pts.length < 2) return 0;
+  return Math.hypot(pts[0].x - pts[1].x, pts[0].y - pts[1].y);
+}
+
+function canStartPinch(coords: Map<number, { x: number; y: number }>): boolean {
+  return coords.size >= 2 && touchSeparationPx(coords) >= PINCH_MIN_SEPARATION_PX;
 }
 
 function pointerMayStartInk(
@@ -228,7 +235,7 @@ function pointerMayStartInk(
   tabletPenOnly: boolean,
 ): boolean {
   const pt = String(pointerType);
-  if (tabletPenOnly) return pt === "pen" || pt === "";
+  if (tabletPenOnly) return pt === "pen";
   if (pt === "pen" || pt === "mouse" || pt === "") return true;
   return allowFingerInk && pt === "touch";
 }
@@ -306,9 +313,7 @@ function shouldRejectTouchForPalm(
   penIgnoreTouchUntil: number,
 ): boolean {
   if (tabletPenOnly) {
-    if (penDrawing) return true;
-    if (performance.now() < penIgnoreTouchUntil) return true;
-    return false;
+    return penDrawing;
   }
   if (isLikelyPalmTouch(e)) return true;
   if (allowFingerInk) return false;
@@ -847,7 +852,11 @@ export const InkOverlay = forwardRef<InkOverlayHandle, Props>(function InkOverla
       if (activeDrawPointerId.current !== ev.pointerId) return;
       if (!currentRef.current || tool !== "draw") return;
       const pt = ev.pointerType as string;
-      if (pt !== "pen" && pt !== "" && pt !== "mouse") return;
+      if (tabletPenOnly) {
+        if (pt !== "pen") return;
+      } else if (pt !== "pen" && pt !== "" && pt !== "mouse") {
+        return;
+      }
       for (const point of coalescedFromPointerEvent(ev)) {
         extendStrokeFromClientRef.current(point.clientX, point.clientY);
       }
@@ -855,7 +864,7 @@ export const InkOverlay = forwardRef<InkOverlayHandle, Props>(function InkOverla
     };
     el.addEventListener("pointerrawupdate", onRaw);
     return () => el.removeEventListener("pointerrawupdate", onRaw);
-  }, [tool, flushInkRedraw]);
+  }, [tool, flushInkRedraw, tabletPenOnly]);
 
   const onPointerDown = useCallback(
     (e: React.PointerEvent<HTMLCanvasElement>) => {
@@ -941,9 +950,7 @@ export const InkOverlay = forwardRef<InkOverlayHandle, Props>(function InkOverla
             ...inkPointerDiagnostics(e),
           });
         }
-        beginDrawOrErase(
-          pt === "pen" || pt === "" ? true : isPenLikePointer(e),
-        );
+        beginDrawOrErase(tabletPenOnly ? true : isPenLikePointer(e));
         return;
       }
 
@@ -989,9 +996,24 @@ export const InkOverlay = forwardRef<InkOverlayHandle, Props>(function InkOverla
         // 손가락 touch — 패닝·핀치(PC는 옵션으로 손가락 필기)
         if (!allowFingerInk && bridge) {
           e.preventDefault();
+
+          if (touchCoordsRef.current.size === 0) {
+            pinchTouchActive.current = false;
+            bridge.endPinch?.();
+            activeTouchPanId.current = null;
+          }
+
           touchCoordsRef.current.set(e.pointerId, { x: e.clientX, y: e.clientY });
 
-          if (touchCoordsRef.current.size >= 2) {
+          if (touchCoordsRef.current.size > 1 && !canStartPinch(touchCoordsRef.current)) {
+            const primaryId = touchCoordsRef.current.keys().next().value;
+            if (primaryId !== undefined && e.pointerId !== primaryId) {
+              touchCoordsRef.current.delete(e.pointerId);
+              return;
+            }
+          }
+
+          if (canStartPinch(touchCoordsRef.current)) {
             if (activeTouchPanId.current !== null) {
               const pid = activeTouchPanId.current;
               bridge.endTouchPan();
@@ -1003,14 +1025,15 @@ export const InkOverlay = forwardRef<InkOverlayHandle, Props>(function InkOverla
               }
             }
             const pts = [...touchCoordsRef.current.values()];
-            if (pts.length >= 2) {
-              const d0 = Math.hypot(pts[0].x - pts[1].x, pts[0].y - pts[1].y);
-              if (d0 > 8) {
-                pinchTouchActive.current = true;
-                bridge.beginPinch?.(d0, (pts[0].x + pts[1].x) / 2, (pts[0].y + pts[1].y) / 2);
-              }
-            }
+            const d0 = touchSeparationPx(touchCoordsRef.current);
+            pinchTouchActive.current = true;
+            bridge.beginPinch?.(d0, (pts[0].x + pts[1].x) / 2, (pts[0].y + pts[1].y) / 2);
             return;
+          }
+
+          if (pinchTouchActive.current) {
+            pinchTouchActive.current = false;
+            bridge.endPinch?.();
           }
 
           e.currentTarget.setPointerCapture(e.pointerId);
@@ -1107,6 +1130,7 @@ export const InkOverlay = forwardRef<InkOverlayHandle, Props>(function InkOverla
       }
 
       if (pt === "touch" && !allowFingerInk && !drawingThisPointer) {
+        if (!bridge) return;
         if (
           shouldRejectTouchForPalm(
             e,
@@ -1126,16 +1150,43 @@ export const InkOverlay = forwardRef<InkOverlayHandle, Props>(function InkOverla
           touchCoordsRef.current.delete(e.pointerId);
           return;
         }
-        if (touchCoordsRef.current.has(e.pointerId)) {
+        if (!touchCoordsRef.current.has(e.pointerId)) {
+          if (e.buttons === 0) return;
           touchCoordsRef.current.set(e.pointerId, { x: e.clientX, y: e.clientY });
-        }
-        if (pinchTouchActive.current && touchCoordsRef.current.size >= 2 && bridge) {
-          const pts = [...touchCoordsRef.current.values()];
-          const d1 = Math.hypot(pts[0].x - pts[1].x, pts[0].y - pts[1].y);
-          bridge.updatePinch?.(d1, (pts[0].x + pts[1].x) / 2, (pts[0].y + pts[1].y) / 2);
+          if (!pinchTouchActive.current && canStartPinch(touchCoordsRef.current)) {
+            const pts = [...touchCoordsRef.current.values()];
+            const d0 = touchSeparationPx(touchCoordsRef.current);
+            pinchTouchActive.current = true;
+            bridge.beginPinch?.(d0, (pts[0].x + pts[1].x) / 2, (pts[0].y + pts[1].y) / 2);
+            return;
+          }
+          if (!pinchTouchActive.current) {
+            activeTouchPanId.current = e.pointerId;
+            bridge.beginTouchPan(e.clientX, e.clientY);
+          }
           return;
         }
-        if (touchCoordsRef.current.size === 1 && bridge) {
+
+        touchCoordsRef.current.set(e.pointerId, { x: e.clientX, y: e.clientY });
+
+        if (pinchTouchActive.current && bridge) {
+          if (canStartPinch(touchCoordsRef.current)) {
+            const pts = [...touchCoordsRef.current.values()];
+            const d1 = touchSeparationPx(touchCoordsRef.current);
+            bridge.updatePinch?.(d1, (pts[0].x + pts[1].x) / 2, (pts[0].y + pts[1].y) / 2);
+            return;
+          }
+          pinchTouchActive.current = false;
+          bridge.endPinch?.();
+          resumeTouchPanIfNeeded(
+            touchCoordsRef.current,
+            activeTouchPanId,
+            pinchTouchActive,
+            bridge,
+          );
+        }
+
+        if (!pinchTouchActive.current && touchCoordsRef.current.size >= 1 && bridge) {
           if (activeTouchPanId.current !== e.pointerId) {
             activeTouchPanId.current = e.pointerId;
             bridge.beginTouchPan(e.clientX, e.clientY);
@@ -1181,10 +1232,7 @@ export const InkOverlay = forwardRef<InkOverlayHandle, Props>(function InkOverla
       if (!currentRef.current) return;
 
       const ptDraw = e.pointerType as string;
-      if (
-        RAW_POINTER_UPDATE_SUPPORTED &&
-        (ptDraw === "pen" || ptDraw === "")
-      ) {
+      if (RAW_POINTER_UPDATE_SUPPORTED && (tabletPenOnly ? ptDraw === "pen" : ptDraw === "pen" || ptDraw === "")) {
         flushInkRedraw();
         return;
       }
@@ -1262,9 +1310,12 @@ export const InkOverlay = forwardRef<InkOverlayHandle, Props>(function InkOverla
       }
       activeDrawPointerId.current = null;
 
-      if (activeDrawIsPenRef.current && palmRejectedDuringPenStrokeRef.current) {
-        penIgnoreTouchUntilRef.current =
-          performance.now() + penPalmRejectGraceMs(tabletPenOnly);
+      if (
+        !tabletPenOnly &&
+        activeDrawIsPenRef.current &&
+        palmRejectedDuringPenStrokeRef.current
+      ) {
+        penIgnoreTouchUntilRef.current = performance.now() + PEN_PALM_REJECT_GRACE_MS_DESKTOP;
       }
       palmRejectedDuringPenStrokeRef.current = false;
       activeDrawIsPenRef.current = false;

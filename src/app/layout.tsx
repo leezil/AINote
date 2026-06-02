@@ -19,6 +19,13 @@ export const metadata: Metadata = {
   description: "문서·필기와 범위가 명확한 AI 질문",
 };
 
+export const viewport = {
+  width: "device-width",
+  initialScale: 1,
+  maximumScale: 1,
+  userScalable: false,
+};
+
 export default function RootLayout({
   children,
 }: Readonly<{
