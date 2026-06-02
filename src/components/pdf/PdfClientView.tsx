@@ -1,8 +1,8 @@
 "use client";
 
 import { useI18n } from "@/lib/i18n/LocaleProvider";
-import { useEffect, useMemo, useState } from "react";
-import { Document, Page, pdfjs } from "react-pdf";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { Document, Page } from "react-pdf";
 import type { PDFPageProxy } from "pdfjs-dist";
 import "react-pdf/dist/Page/AnnotationLayer.css";
 import "react-pdf/dist/Page/TextLayer.css";
@@ -18,8 +18,9 @@ import {
   MAX_PDF_CANVAS_SIDE_PX,
   PDF_PAGE_ASPECT_HEIGHT,
 } from "@/lib/documents/pdf-render-quality";
+import { ensurePdfJsWorker } from "@/lib/pdf/setup-pdfjs";
 
-pdfjs.GlobalWorkerOptions.workerSrc = `https://unpkg.com/pdfjs-dist@${pdfjs.version}/build/pdf.worker.min.mjs`;
+ensurePdfJsWorker();
 
 type Props = {
   fileUrl: string;
@@ -62,18 +63,29 @@ export function PdfClientView({
   const pdfDevicePixelRatio = Math.min(baseDpr, dprFloor);
   const [renderFailed, setRenderFailed] = useState(false);
   const [renderReady, setRenderReady] = useState(false);
+  const [docError, setDocError] = useState(false);
+  const onPdfLoadedRef = useRef(onPdfLoaded);
+  onPdfLoadedRef.current = onPdfLoaded;
 
   useEffect(() => {
     setPageAspect(PDF_PAGE_ASPECT_HEIGHT);
+    setDocError(false);
   }, [pageNumber, fileUrl]);
 
   useEffect(() => {
     setDprFloor(baseDpr);
     setRenderFailed(false);
     setRenderReady(false);
-  }, [pageNumber, renderKey, fileUrl, baseDpr]);
+  }, [pageNumber, renderKey, fileUrl]);
 
-  const file = useMemo(() => ({ url: fileUrl }), [fileUrl]);
+  useEffect(() => {
+    setDprFloor((prev) => Math.max(prev, baseDpr));
+  }, [baseDpr]);
+
+  const file = useMemo(
+    () => ({ url: fileUrl, withCredentials: true }),
+    [fileUrl],
+  );
 
   const onPageLoad = (page: PDFPageProxy) => {
     const vp = page.getViewport({ scale: 1 });
@@ -98,9 +110,9 @@ export function PdfClientView({
           {t("pdf.maxZoomRaster")}
         </span>
       ) : null}
-      {renderFailed ? (
+      {docError ? (
         <p className="absolute inset-0 z-20 flex items-center justify-center p-4 text-center text-sm text-red-600 dark:text-red-400">
-          {t("pdf.renderFailed")}
+          {t("pdf.error")}
         </p>
       ) : null}
       <Document
@@ -108,10 +120,12 @@ export function PdfClientView({
         file={file}
         className="block"
         onLoadSuccess={(pdf) => {
-          onPdfLoaded?.(pdf.numPages);
+          setDocError(false);
+          onPdfLoadedRef.current?.(pdf.numPages);
         }}
+        onLoadError={() => setDocError(true)}
         loading={
-          renderReady ? null : (
+          renderReady || docError ? null : (
             <div
               className="flex items-center justify-center bg-zinc-100/90 text-sm text-zinc-500 dark:bg-zinc-900/90"
               style={{ width: renderWidth, height: renderHeight }}
@@ -120,11 +134,7 @@ export function PdfClientView({
             </div>
           )
         }
-        error={
-          <p className="p-4 text-sm text-red-600" style={{ width: renderWidth }}>
-            {t("pdf.error")}
-          </p>
-        }
+        error={null}
       >
         <Page
           key={`${pageNumber}-${renderKey}`}
