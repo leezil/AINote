@@ -462,10 +462,10 @@ export function ZoomPanSurface({
         <div
           ref={transformLayerRef}
           className={[
-            "will-change-transform max-h-full max-w-full min-h-0",
+            "will-change-transform shrink-0",
             stretchContent
               ? "flex h-full w-full justify-center"
-              : "flex w-full min-w-0 min-h-0 max-h-full flex-col items-stretch",
+              : "inline-flex w-max max-w-none flex-col items-stretch",
             navigationMode ? "pointer-events-none" : "",
           ]
             .filter(Boolean)

@@ -934,7 +934,7 @@ export function WorkspaceApp() {
                 onScaleChange={onGestureScaleChange}
                 onScaleSettled={onGestureScaleSettled}
                 touchBridgeRef={touchPanBridgeRef}
-                stretchContent={viewerFullscreen && inkLayerActive}
+                stretchContent={false}
                 viewResetKey={
                   activeMeta ? `${activeMeta.id}-${currentPage}` : "none"
                 }
@@ -950,27 +950,25 @@ export function WorkspaceApp() {
                   ref={captureRef}
                   data-zoom-document-surface
                   className={[
-                    "relative isolate mx-auto max-w-full",
+                    "relative isolate mx-auto w-max max-w-none shrink-0",
                     activeMeta.kind === "pdf" ? "ainote-no-select" : "",
                     viewerFullscreen
-                      ? "flex min-h-0 w-full min-w-0 max-w-full max-h-full flex-col items-center"
-                      : "w-full min-w-0",
+                      ? "flex min-h-0 flex-col items-center"
+                      : "",
                   ]
                     .filter(Boolean)
                     .join(" ")}
                 >
                   <div
                     className={[
-                      viewerFullscreen && inkLayerActive
-                        ? "max-h-full min-h-0 touch-none overflow-hidden"
-                        : "",
+                      inkLayerActive ? "touch-none" : "",
                     ]
                       .filter(Boolean)
                       .join(" ")}
                   >
                     <div
                       data-ink-document-content
-                      className="relative inline-block max-w-full align-top"
+                      className="relative inline-block w-max max-w-none shrink-0 align-top"
                     >
                       {activeMeta.kind === "pdf" ? (
                         <div
