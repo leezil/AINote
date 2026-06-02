@@ -98,6 +98,24 @@ export function visibleTilesForView(params: {
   return out;
 }
 
+/** 페이지 전체 타일 목록 (배경 전체 렌더 2단계용) */
+export function allTilesForPage(
+  pageWidth: number,
+  pageHeight: number,
+  tileSize = PDF_TILE_CSS_PX,
+): TileSpec[] {
+  if (pageWidth <= 0 || pageHeight <= 0) return [];
+  const cols = Math.max(1, Math.ceil(pageWidth / tileSize));
+  const rows = Math.max(1, Math.ceil(pageHeight / tileSize));
+  const out: TileSpec[] = [];
+  for (let row = 0; row < rows; row++) {
+    for (let col = 0; col < cols; col++) {
+      out.push(tileSpec(col, row, pageWidth, pageHeight, tileSize));
+    }
+  }
+  return out;
+}
+
 /** 타일 캔버스 픽셀 상한 내 DPR */
 export function tileDevicePixelRatio(
   tileCssW: number,

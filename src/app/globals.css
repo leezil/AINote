@@ -56,3 +56,11 @@ body {
   -webkit-user-drag: none;
   user-drag: none;
 }
+
+.ainote-ink-surface,
+[data-ink-document-content],
+[data-pdf-page-box],
+[data-ainote-zoom-viewport] {
+  touch-action: none;
+  -webkit-touch-callout: none;
+}

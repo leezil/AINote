@@ -486,8 +486,18 @@ export const InkOverlay = forwardRef<InkOverlayHandle, Props>(function InkOverla
     const el = canvasRef.current;
     if (!el) return;
     const blockSelect = (e: Event) => e.preventDefault();
+    const blockTouch = (e: TouchEvent) => {
+      if (e.touches.length > 1) return;
+      e.preventDefault();
+    };
     el.addEventListener("selectstart", blockSelect);
-    return () => el.removeEventListener("selectstart", blockSelect);
+    el.addEventListener("touchstart", blockTouch, { passive: false });
+    el.addEventListener("touchmove", blockTouch, { passive: false });
+    return () => {
+      el.removeEventListener("selectstart", blockSelect);
+      el.removeEventListener("touchstart", blockTouch);
+      el.removeEventListener("touchmove", blockTouch);
+    };
   }, []);
 
   const putInkRemote = useCallback((remote: RemoteInkConfig, strokes: Stroke[]) => {
@@ -930,13 +940,15 @@ export const InkOverlay = forwardRef<InkOverlayHandle, Props>(function InkOverla
         eraserHoverRef.current = null;
         commitInProgressStroke();
         const { w } = readContentSize(canvasRef.current);
+        const undoSnapshot = cloneStrokes(strokesRef.current);
         currentRef.current = {
           color: strokeColor,
           width: strokeWidthNorm(strokeWidth, w),
           points: [clientPointFromClient(e.clientX, e.clientY)],
         };
-        pushUndoSnapshot(cloneStrokes(strokesRef.current));
         flushInkRedraw();
+        queueMicrotask(() => pushUndoSnapshot(undoSnapshot));
+        return;
       };
 
       if (pointerMayStartInk(pt, allowFingerInk, tabletPenOnly)) {
@@ -1371,7 +1383,7 @@ export const InkOverlay = forwardRef<InkOverlayHandle, Props>(function InkOverla
   return (
     <canvas
       ref={canvasRef}
-      className={[className, "select-none ainote-no-select"].filter(Boolean).join(" ") || undefined}
+      className={["ainote-ink-surface", className, "select-none ainote-no-select"].filter(Boolean).join(" ") || undefined}
       style={{ touchAction: "none" }}
       onContextMenu={(e) => e.preventDefault()}
       onPointerDown={onPointerDown}

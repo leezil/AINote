@@ -36,9 +36,9 @@ function PdfViewerLoading() {
   return <p className="p-4 text-sm text-zinc-500">{t("pdfViewer.loading")}</p>;
 }
 
-const PdfClientView = dynamic(
+const TiledPdfClientView = dynamic(
   () =>
-    import("@/components/pdf/PdfClientView").then((m) => m.PdfClientView),
+    import("@/components/pdf/TiledPdfClientView").then((m) => m.TiledPdfClientView),
   { ssr: false, loading: PdfViewerLoading },
 );
 
@@ -380,14 +380,17 @@ export function WorkspaceApp() {
   );
 
   const docFitWidth = Math.max(280, Math.min(8192, Math.floor(docViewportW)));
-  const maxRasterScale = maxRasterScaleForFit(docFitWidth);
+  const activeIsPdf = activeMeta?.kind === "pdf";
+  const maxRasterScale = activeIsPdf ? 10 : maxRasterScaleForFit(docFitWidth);
   const {
     zoomScale,
     committedScale,
     onGestureScaleChange,
     onGestureScaleSettled,
   } = useCommittedPdfScale(1, maxRasterScale);
-  const displayRasterScale = computeDisplayRasterScale(docFitWidth, committedScale);
+  const displayRasterScale = activeIsPdf
+    ? 1
+    : computeDisplayRasterScale(docFitWidth, committedScale);
   const viewportPdfScale = zoomScale;
 
   const handlePdfLoaded = useCallback((docId: string, numPages: number) => {
@@ -942,6 +945,7 @@ export function WorkspaceApp() {
                 initialScale={zoomScale}
                 rasterCommitScale={displayRasterScale}
                 maxGestureScale={maxRasterScale}
+                layoutZoomMode={activeIsPdf}
                 onViewportWidthChange={setDocViewportW}
                 onScaleChange={onGestureScaleChange}
                 onScaleSettled={onGestureScaleSettled}
@@ -990,14 +994,12 @@ export function WorkspaceApp() {
                               : undefined
                           }
                         >
-                          <PdfClientView
+                          <TiledPdfClientView
                             key={activeMeta.id}
                             fileUrl={fileUrl}
                             pageNumber={currentPage}
                             maxWidthPx={8192}
                             wideMode={viewerFullscreen}
-                            viewportScale={viewportPdfScale}
-                            committedScale={displayRasterScale}
                             onPdfLoaded={(n) => handlePdfLoaded(activeMeta.id, n)}
                           />
                         </div>

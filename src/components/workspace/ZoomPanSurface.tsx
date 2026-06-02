@@ -198,13 +198,21 @@ export function ZoomPanSurface({
     const el = viewportRef.current;
     if (!el) return;
     const blockGesture = (e: Event) => e.preventDefault();
+    const blockTouchChrome = (e: TouchEvent) => {
+      if (e.touches.length > 1) return;
+      e.preventDefault();
+    };
     el.addEventListener("gesturestart", blockGesture, { passive: false });
     el.addEventListener("gesturechange", blockGesture, { passive: false });
     el.addEventListener("gestureend", blockGesture, { passive: false });
+    el.addEventListener("touchstart", blockTouchChrome, { passive: false });
+    el.addEventListener("touchmove", blockTouchChrome, { passive: false });
     return () => {
       el.removeEventListener("gesturestart", blockGesture);
       el.removeEventListener("gesturechange", blockGesture);
       el.removeEventListener("gestureend", blockGesture);
+      el.removeEventListener("touchstart", blockTouchChrome);
+      el.removeEventListener("touchmove", blockTouchChrome);
     };
   }, []);
 

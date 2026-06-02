@@ -4,7 +4,9 @@ import { useI18n } from "@/lib/i18n/LocaleProvider";
 import { useZoomPanTransform } from "@/components/workspace/ZoomPanTransformContext";
 import { useFitDocumentWidth } from "@/lib/documents/zoomable-document";
 import { PDF_PAGE_ASPECT_HEIGHT } from "@/lib/documents/pdf-render-quality";
+import { ensurePdfJsWorker } from "@/lib/pdf/setup-pdfjs";
 import {
+  allTilesForPage,
   pageDimensions,
   tileDevicePixelRatio,
   visibleTilesForView,
@@ -14,7 +16,7 @@ import { pdfjs } from "react-pdf";
 import type { PDFDocumentProxy, PDFPageProxy } from "pdfjs-dist";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
-pdfjs.GlobalWorkerOptions.workerSrc = `https://unpkg.com/pdfjs-dist@${pdfjs.version}/build/pdf.worker.min.mjs`;
+ensurePdfJsWorker();
 
 type Props = {
   fileUrl: string;
@@ -24,10 +26,16 @@ type Props = {
   onPdfLoaded?: (numPages: number) => void;
 };
 
-type TileEntry = {
-  spec: TileSpec;
-  canvas: HTMLCanvasElement;
-};
+function yieldToMain(): Promise<void> {
+  return new Promise((resolve) => {
+    const sched = (globalThis as { scheduler?: { yield?: () => Promise<void> } }).scheduler;
+    if (sched?.yield) {
+      void sched.yield().then(resolve);
+      return;
+    }
+    setTimeout(resolve, 0);
+  });
+}
 
 export function TiledPdfClientView({
   fileUrl,
@@ -43,16 +51,21 @@ export function TiledPdfClientView({
   const tilesHostRef = useRef<HTMLDivElement | null>(null);
 
   const [aspect, setAspect] = useState(PDF_PAGE_ASPECT_HEIGHT);
-  const [numPages, setNumPages] = useState(0);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [pageReady, setPageReady] = useState(false);
+  const [visiblePassDone, setVisiblePassDone] = useState(false);
+  const [fullPassDone, setFullPassDone] = useState(false);
 
   const pdfDocRef = useRef<PDFDocumentProxy | null>(null);
   const pdfPageRef = useRef<PDFPageProxy | null>(null);
   const tileCacheRef = useRef<Map<string, HTMLCanvasElement>>(new Map());
   const renderGenRef = useRef(0);
   const renderingRef = useRef(false);
-  const pendingTilesRef = useRef<TileSpec[]>([]);
+  const onPdfLoadedRef = useRef(onPdfLoaded);
+  onPdfLoadedRef.current = onPdfLoaded;
+
+  const transformRef = useRef(transform);
+  transformRef.current = transform;
 
   const { pageWidth, pageHeight } = useMemo(
     () => pageDimensions(fitWidth, transform.scale, aspect),
@@ -62,14 +75,24 @@ export function TiledPdfClientView({
   const pdfRenderScale = useMemo(() => {
     const vp1 = pdfPageRef.current?.getViewport({ scale: 1 });
     if (!vp1 || vp1.width <= 0) return transform.scale;
-    return (pageWidth / vp1.width);
+    return pageWidth / vp1.width;
   }, [pageWidth, transform.scale, pageReady]);
 
-  const loadPdf = useCallback(async () => {
+  const pdfRenderScaleRef = useRef(pdfRenderScale);
+  pdfRenderScaleRef.current = pdfRenderScale;
+
+  const pageSizeRef = useRef({ pageWidth, pageHeight });
+  pageSizeRef.current = { pageWidth, pageHeight };
+
+  useEffect(() => {
+    let cancelled = false;
     setLoadError(null);
     setPageReady(false);
+    setVisiblePassDone(false);
+    setFullPassDone(false);
     tileCacheRef.current.clear();
-    if (tilesHostRef.current) tilesHostRef.current.replaceChildren();
+    tilesHostRef.current?.replaceChildren();
+    renderGenRef.current += 1;
 
     if (pdfDocRef.current) {
       void pdfDocRef.current.destroy();
@@ -77,182 +100,218 @@ export function TiledPdfClientView({
     }
     pdfPageRef.current = null;
 
-    try {
-      const task = pdfjs.getDocument({ url: fileUrl });
-      const doc = await task.promise;
-      pdfDocRef.current = doc;
-      setNumPages(doc.numPages);
-      onPdfLoaded?.(doc.numPages);
+    void (async () => {
+      try {
+        const task = pdfjs.getDocument({ url: fileUrl, withCredentials: true });
+        const doc = await task.promise;
+        if (cancelled) {
+          void doc.destroy();
+          return;
+        }
+        pdfDocRef.current = doc;
+        onPdfLoadedRef.current?.(doc.numPages);
 
-      const page = await doc.getPage(pageNumber);
-      pdfPageRef.current = page;
-      const vp = page.getViewport({ scale: 1 });
-      if (vp.width > 0) setAspect(vp.height / vp.width);
-      setPageReady(true);
-    } catch (e) {
-      setLoadError(e instanceof Error ? e.message : "load failed");
-    }
-  }, [fileUrl, pageNumber, fitWidth, onPdfLoaded]);
+        const page = await doc.getPage(pageNumber);
+        if (cancelled) return;
+        pdfPageRef.current = page;
+        const vp = page.getViewport({ scale: 1 });
+        if (vp.width > 0) setAspect(vp.height / vp.width);
+        setPageReady(true);
+      } catch (e) {
+        if (!cancelled) {
+          setLoadError(e instanceof Error ? e.message : "load failed");
+        }
+      }
+    })();
 
-  useEffect(() => {
-    void loadPdf();
     return () => {
+      cancelled = true;
       renderGenRef.current += 1;
       if (pdfDocRef.current) {
         void pdfDocRef.current.destroy();
         pdfDocRef.current = null;
       }
     };
-  }, [loadPdf]);
+  }, [fileUrl, pageNumber]);
 
-  const renderTile = useCallback(
-    async (spec: TileSpec, gen: number) => {
-      const page = pdfPageRef.current;
-      if (!page || gen !== renderGenRef.current) return;
-
-      const cached = tileCacheRef.current.get(spec.key);
-      if (cached) return;
-
-      const pdfScale = pdfRenderScale;
-      const viewport = page.getViewport({ scale: pdfScale });
-      const windowDpr = typeof window !== "undefined" ? window.devicePixelRatio || 1 : 1;
-      const dpr = tileDevicePixelRatio(spec.w, spec.h, 1, windowDpr);
-
-      const canvas = document.createElement("canvas");
-      canvas.width = Math.max(1, Math.floor(spec.w * dpr));
-      canvas.height = Math.max(1, Math.floor(spec.h * dpr));
-      canvas.className = "block max-w-none";
-      canvas.style.width = `${spec.w}px`;
-      canvas.style.height = `${spec.h}px`;
-
-      const ctx = canvas.getContext("2d");
-      if (!ctx) return;
-
-      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-
-      try {
-        await page.render({
-          canvas,
-          canvasContext: ctx,
-          viewport,
-          transform: [1, 0, 0, 1, -spec.x, -spec.y],
-        }).promise;
-      } catch {
-        return;
-      }
-
-      if (gen !== renderGenRef.current) return;
-
-      tileCacheRef.current.set(spec.key, canvas);
-      const host = tilesHostRef.current;
-      if (!host) return;
-
-      const wrap = document.createElement("div");
-      wrap.dataset.tileKey = spec.key;
-      wrap.style.position = "absolute";
-      wrap.style.left = `${spec.x}px`;
-      wrap.style.top = `${spec.y}px`;
-      wrap.style.width = `${spec.w}px`;
-      wrap.style.height = `${spec.h}px`;
-      wrap.style.overflow = "hidden";
-      wrap.appendChild(canvas);
-      host.appendChild(wrap);
-    },
-    [pdfRenderScale],
-  );
-
-  const scheduleTilePass = useCallback(() => {
+  const collectVisibleTiles = useCallback((): TileSpec[] => {
     const vpEl = document.querySelector("[data-ainote-zoom-viewport]");
     const pageEl = pageRef.current;
-    if (!(vpEl instanceof HTMLElement) || !pageEl || !pageReady) return;
+    const { pageWidth: pw, pageHeight: ph } = pageSizeRef.current;
+    if (!(vpEl instanceof HTMLElement) || !pageEl) return [];
 
     const vpRect = vpEl.getBoundingClientRect();
     const pageRect = pageEl.getBoundingClientRect();
 
-    const tiles = visibleTilesForView({
+    return visibleTilesForView({
       viewportLeft: vpRect.left,
       viewportTop: vpRect.top,
       viewportWidth: vpRect.width,
       viewportHeight: vpRect.height,
       pageLeft: pageRect.left,
       pageTop: pageRect.top,
-      pageWidth,
-      pageHeight,
+      pageWidth: pw,
+      pageHeight: ph,
     });
+  }, []);
 
-    const needed = new Set(tiles.map((t) => t.key));
+  const mountTileCanvas = useCallback((spec: TileSpec, canvas: HTMLCanvasElement) => {
     const host = tilesHostRef.current;
-    if (host) {
-      for (const child of [...host.children]) {
-        if (child instanceof HTMLElement) {
-          const k = child.dataset.tileKey;
-          if (k && !needed.has(k)) {
-            child.remove();
-          }
-        }
-      }
+    if (!host) return;
+    const existing = host.querySelector(`[data-tile-key="${spec.key}"]`);
+    if (existing) return;
+
+    const wrap = document.createElement("div");
+    wrap.dataset.tileKey = spec.key;
+    wrap.style.position = "absolute";
+    wrap.style.left = `${spec.x}px`;
+    wrap.style.top = `${spec.y}px`;
+    wrap.style.width = `${spec.w}px`;
+    wrap.style.height = `${spec.h}px`;
+    wrap.style.overflow = "hidden";
+    wrap.appendChild(canvas);
+    host.appendChild(wrap);
+  }, []);
+
+  const renderTile = useCallback(async (spec: TileSpec, gen: number): Promise<boolean> => {
+    const page = pdfPageRef.current;
+    if (!page || gen !== renderGenRef.current) return false;
+
+    if (tileCacheRef.current.has(spec.key)) {
+      const cached = tileCacheRef.current.get(spec.key)!;
+      mountTileCanvas(spec, cached);
+      return true;
     }
 
-    for (const k of [...tileCacheRef.current.keys()]) {
-      if (!needed.has(k)) tileCacheRef.current.delete(k);
+    const pdfScale = pdfRenderScaleRef.current;
+    const viewport = page.getViewport({ scale: pdfScale });
+    const windowDpr = typeof window !== "undefined" ? window.devicePixelRatio || 1 : 1;
+    const dpr = tileDevicePixelRatio(spec.w, spec.h, 1, windowDpr);
+
+    const canvas = document.createElement("canvas");
+    canvas.width = Math.max(1, Math.floor(spec.w * dpr));
+    canvas.height = Math.max(1, Math.floor(spec.h * dpr));
+    canvas.className = "block max-w-none";
+    canvas.style.width = `${spec.w}px`;
+    canvas.style.height = `${spec.h}px`;
+
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return false;
+
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+
+    try {
+      await page.render({
+        canvas,
+        canvasContext: ctx,
+        viewport,
+        transform: [1, 0, 0, 1, -spec.x, -spec.y],
+      }).promise;
+    } catch {
+      return false;
     }
 
-    pendingTilesRef.current = tiles.filter((t) => !tileCacheRef.current.has(t.key));
-    if (renderingRef.current) return;
+    if (gen !== renderGenRef.current) return false;
+
+    tileCacheRef.current.set(spec.key, canvas);
+    mountTileCanvas(spec, canvas);
+    return true;
+  }, [mountTileCanvas]);
+
+  const runTwoPhaseRender = useCallback(async () => {
+    if (!pageReady || renderingRef.current) return;
     renderingRef.current = true;
     const gen = renderGenRef.current;
 
-    void (async () => {
-      for (const spec of pendingTilesRef.current) {
-        if (gen !== renderGenRef.current) break;
+    try {
+      const visible = collectVisibleTiles();
+      for (const spec of visible) {
+        if (gen !== renderGenRef.current) return;
         await renderTile(spec, gen);
+        await yieldToMain();
       }
+      if (gen === renderGenRef.current) setVisiblePassDone(true);
+
+      const { pageWidth: pw, pageHeight: ph } = pageSizeRef.current;
+      const all = allTilesForPage(pw, ph);
+      for (const spec of all) {
+        if (gen !== renderGenRef.current) return;
+        if (tileCacheRef.current.has(spec.key)) continue;
+        await renderTile(spec, gen);
+        await yieldToMain();
+      }
+      if (gen === renderGenRef.current) setFullPassDone(true);
+    } finally {
       renderingRef.current = false;
-      if (
-        pendingTilesRef.current.length > 0 &&
-        gen === renderGenRef.current
-      ) {
-        scheduleTilePass();
+    }
+  }, [pageReady, collectVisibleTiles, renderTile]);
+
+  const scheduleVisibleOnly = useCallback(() => {
+    if (!pageReady) return;
+    void (async () => {
+      if (renderingRef.current) return;
+      renderingRef.current = true;
+      const gen = renderGenRef.current;
+      try {
+        const visible = collectVisibleTiles();
+        for (const spec of visible) {
+          if (gen !== renderGenRef.current) return;
+          if (tileCacheRef.current.has(spec.key)) continue;
+          await renderTile(spec, gen);
+          await yieldToMain();
+        }
+      } finally {
+        renderingRef.current = false;
       }
     })();
-  }, [pageReady, pageWidth, pageHeight, renderTile]);
+  }, [pageReady, collectVisibleTiles, renderTile]);
 
   useEffect(() => {
     if (!pageReady) return;
     renderGenRef.current += 1;
     tileCacheRef.current.clear();
-    if (tilesHostRef.current) tilesHostRef.current.replaceChildren();
-
-    const id = requestAnimationFrame(() => scheduleTilePass());
+    tilesHostRef.current?.replaceChildren();
+    setVisiblePassDone(false);
+    setFullPassDone(false);
+    const id = requestAnimationFrame(() => {
+      void runTwoPhaseRender();
+    });
     return () => cancelAnimationFrame(id);
+  }, [pageReady, pageWidth, pageHeight, pdfRenderScale, runTwoPhaseRender]);
+
+  useEffect(() => {
+    if (!pageReady) return;
+    let raf = 0;
+    const onPan = () => {
+      if (raf) cancelAnimationFrame(raf);
+      raf = requestAnimationFrame(() => scheduleVisibleOnly());
+    };
+    onPan();
+    return () => {
+      if (raf) cancelAnimationFrame(raf);
+    };
   }, [
     pageReady,
-    pageNumber,
-    fileUrl,
-    pageWidth,
-    pageHeight,
-    pdfRenderScale,
-    transform.scale,
     transform.panX,
     transform.panY,
     transform.viewportWidth,
     transform.viewportHeight,
-    scheduleTilePass,
+    scheduleVisibleOnly,
   ]);
 
   useEffect(() => {
     if (!pageReady) return;
     let raf = 0;
-    const onMove = () => {
+    const onScroll = () => {
       if (raf) cancelAnimationFrame(raf);
-      raf = requestAnimationFrame(() => scheduleTilePass());
+      raf = requestAnimationFrame(() => scheduleVisibleOnly());
     };
-    window.addEventListener("scroll", onMove, true);
+    window.addEventListener("scroll", onScroll, true);
     return () => {
-      window.removeEventListener("scroll", onMove, true);
+      window.removeEventListener("scroll", onScroll, true);
       if (raf) cancelAnimationFrame(raf);
     };
-  }, [pageReady, scheduleTilePass]);
+  }, [pageReady, scheduleVisibleOnly]);
 
   if (loadError) {
     return <p className="p-4 text-sm text-red-600">{t("pdf.error")}</p>;
@@ -263,17 +322,20 @@ export function TiledPdfClientView({
       ref={pageRef}
       data-pdf-page-box
       className="ainote-no-select relative inline-block shrink-0 overflow-hidden bg-zinc-100/80 dark:bg-zinc-900/60"
-      style={{ width: pageWidth, height: pageHeight }}
+      style={{ width: pageWidth, height: pageHeight, touchAction: "none" }}
     >
       {!pageReady ? (
-        <div
-          className="flex h-full w-full items-center justify-center text-sm text-zinc-500"
-        >
+        <div className="flex h-full w-full items-center justify-center text-sm text-zinc-500">
           {t("pdf.loading")}
         </div>
       ) : null}
       <div ref={tilesHostRef} className="absolute inset-0" aria-hidden={!pageReady} />
-      {pageReady && numPages > 0 ? (
+      {pageReady && !fullPassDone && visiblePassDone ? (
+        <span className="pointer-events-none absolute left-1 top-1 z-10 rounded bg-black/45 px-1.5 py-0.5 text-[10px] text-white">
+          {t("pdf.sharpening")}
+        </span>
+      ) : null}
+      {pageReady ? (
         <span className="pointer-events-none absolute right-1 top-1 z-10 rounded bg-black/40 px-1.5 py-0.5 text-[10px] text-white">
           {t("pdf.tiledView")}
         </span>
