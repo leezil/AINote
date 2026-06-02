@@ -635,25 +635,10 @@ export function WorkspaceApp() {
     return () => window.removeEventListener("keydown", onKey);
   }, [activeId, inkLayerActive]);
 
-  /** 필기 모드에서 빠른 연속 획 후 텍스트(사이드바·헤더 등)로 선택이 넘어가는 것 방지 */
-  useEffect(() => {
-    if (!inkPointerActive) return;
-    const block = (e: Event) => {
-      e.preventDefault();
-    };
-    document.addEventListener("selectstart", block, true);
-    document.addEventListener("dragstart", block, true);
-    return () => {
-      document.removeEventListener("selectstart", block, true);
-      document.removeEventListener("dragstart", block, true);
-    };
-  }, [inkPointerActive]);
-
   return (
     <div
       className={[
-        "mx-auto flex min-h-0 w-full flex-1",
-        inkPointerActive ? "select-none ainote-no-select" : "",
+        "mx-auto flex min-h-0 w-full flex-1 ainote-no-select",
         viewerFullscreen
           ? "max-w-none flex-col p-0"
           : "max-w-6xl flex-col gap-3 p-3 md:flex-row md:gap-4 md:p-4",
@@ -669,7 +654,10 @@ export function WorkspaceApp() {
       >
         <div className="rounded-xl border border-zinc-200 bg-white p-3 shadow-sm dark:border-zinc-800 dark:bg-zinc-950">
           <p className="text-xs font-medium text-zinc-500">{t("workspace.materials")}</p>
-          <label className="mt-2 flex cursor-pointer items-center justify-center rounded-lg border border-dashed border-zinc-300 bg-zinc-50 px-2 py-3 text-sm text-zinc-700 hover:bg-zinc-100 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-200 dark:hover:bg-zinc-800">
+          <label
+            data-ainote-interactive
+            className="mt-2 flex cursor-pointer items-center justify-center rounded-lg border border-dashed border-zinc-300 bg-zinc-50 px-2 py-3 text-sm text-zinc-700 hover:bg-zinc-100 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-200 dark:hover:bg-zinc-800"
+          >
             <input type="file" className="hidden" accept=".pdf,image/*,.txt" onChange={onUpload} />
             {t("workspace.upload")}
           </label>

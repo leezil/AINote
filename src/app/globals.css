@@ -32,3 +32,27 @@ body {
   user-select: none !important;
   -webkit-touch-callout: none !important;
 }
+
+/* 앱 셸: 버튼·입력만 텍스트 선택 허용 (필기·패닝 중 UI 선택 방지) */
+.ainote-app-shell {
+  -webkit-user-select: none;
+  user-select: none;
+  -webkit-touch-callout: none;
+}
+
+.ainote-app-shell :is(
+  input:not([type="hidden"]),
+  textarea,
+  select,
+  [contenteditable="true"],
+  [data-ainote-allow-select]
+) {
+  -webkit-user-select: text !important;
+  user-select: text !important;
+  -webkit-touch-callout: default;
+}
+
+.ainote-app-shell img {
+  -webkit-user-drag: none;
+  user-drag: none;
+}

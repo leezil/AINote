@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
 import { AppHeader } from "@/components/AppHeader";
+import { SelectionGuard } from "@/components/SelectionGuard";
 import { LocaleProvider } from "@/lib/i18n/LocaleProvider";
 import "./globals.css";
 
@@ -39,8 +40,10 @@ export default function RootLayout({
     >
       <body className="flex min-h-full flex-col bg-zinc-50 text-zinc-900 dark:bg-zinc-950 dark:text-zinc-50">
         <LocaleProvider>
-          <AppHeader />
-          {children}
+          <SelectionGuard>
+            <AppHeader />
+            {children}
+          </SelectionGuard>
         </LocaleProvider>
       </body>
     </html>
