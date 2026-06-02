@@ -38,7 +38,7 @@ export function WorkspaceDocImage({
   const [aspectRatio, setAspectRatio] = useState(4 / 3);
   const { fitWidth } = useFitDocumentWidth({ maxWidthPx, wideMode });
   const renderWidth = computeRenderWidth(fitWidth, committedScale);
-  const sharpening = isDocumentSharpening(viewportScale, committedScale);
+  const sharpening = isDocumentSharpening(viewportScale, committedScale, fitWidth);
   const windowDpr = typeof window !== "undefined" ? window.devicePixelRatio || 1 : 1;
   const displayDpr = computePdfDevicePixelRatio(
     committedScale,

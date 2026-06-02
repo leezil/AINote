@@ -32,7 +32,7 @@ export function WorkspaceDocText({
   const { fitWidth } = useFitDocumentWidth({ maxWidthPx, wideMode });
   const renderWidth = computeRenderWidth(fitWidth, committedScale);
   const safeCommitted = clampZoomScale(committedScale);
-  const sharpening = isDocumentSharpening(viewportScale, committedScale);
+  const sharpening = isDocumentSharpening(viewportScale, committedScale, fitWidth);
 
   useEffect(() => {
     let cancelled = false;

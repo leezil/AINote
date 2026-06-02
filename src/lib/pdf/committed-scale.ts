@@ -12,19 +12,30 @@ const COMMIT_EPSILON =
  * - 제스처 중: CSS scale = zoom / committed (부드러운 확대)
  * - 제스처 종료·디바운스 후: committed = zoom, CSS scale = 1 (선명)
  */
-export function useCommittedPdfScale(initial = 1) {
+export function useCommittedPdfScale(initial = 1, maxRasterScale = 10) {
   const [zoomScale, setZoomScale] = useState(initial);
-  const [committedScale, setCommittedScale] = useState(initial);
-  const committedRef = useRef(initial);
+  const [committedScale, setCommittedScale] = useState(() =>
+    Math.min(clampZoomScale(initial), maxRasterScale),
+  );
+  const committedRef = useRef(committedScale);
   committedRef.current = committedScale;
+  const maxRasterRef = useRef(maxRasterScale);
+  maxRasterRef.current = maxRasterScale;
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const applyCommitted = useCallback((s: number) => {
-    const next = clampZoomScale(s);
+    const next = clampZoomScale(Math.min(s, maxRasterRef.current));
     if (Math.abs(next - committedRef.current) < COMMIT_EPSILON) return;
     committedRef.current = next;
     setCommittedScale(next);
   }, []);
+
+  useEffect(() => {
+    const cap = maxRasterScale;
+    if (committedRef.current <= cap) return;
+    committedRef.current = cap;
+    setCommittedScale(cap);
+  }, [maxRasterScale]);
 
   const flushCommitted = useCallback(
     (s: number) => {

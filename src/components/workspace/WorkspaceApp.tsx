@@ -19,6 +19,10 @@ import {
   isTabletPenOnlyProfile,
   useInkInputProfile,
 } from "@/lib/device/ink-input-profile";
+import {
+  computeDisplayRasterScale,
+  maxRasterScaleForFit,
+} from "@/lib/documents/zoomable-document";
 import { useCommittedPdfScale } from "@/lib/pdf/committed-scale";
 import { inkDebugLog, readInkDebugFlag } from "@/lib/inkDebug";
 import { InkOverlay, type InkOverlayHandle, type ZoomPanTouchBridge } from "@/components/ink/InkOverlay";
@@ -87,12 +91,16 @@ export function WorkspaceApp() {
   const [fullscreenAiOpen, setFullscreenAiOpen] = useState(true);
   const [aiPanelWidthPx, setAiPanelWidthPx] = useState(380);
   const [isMdUp, setIsMdUp] = useState(false);
+  const [docViewportW, setDocViewportW] = useState(960);
+  const docFitWidth = Math.max(280, Math.min(8192, Math.floor(docViewportW)));
+  const maxRasterScale = maxRasterScaleForFit(docFitWidth);
   const {
     zoomScale,
     committedScale,
     onGestureScaleChange,
     onGestureScaleSettled,
-  } = useCommittedPdfScale(1);
+  } = useCommittedPdfScale(1, maxRasterScale);
+  const displayRasterScale = computeDisplayRasterScale(docFitWidth, committedScale);
   const [inkColor, setInkColor] = useState("#2563eb");
   const [inkWidth, setInkWidth] = useState(2.8);
   const [eraserRadius, setEraserRadius] = useState(18);
@@ -921,7 +929,8 @@ export function WorkspaceApp() {
                 navigationMode={false}
                 className={viewerFullscreen ? "h-full min-h-0" : "min-h-[320px]"}
                 initialScale={zoomScale}
-                rasterCommitScale={committedScale}
+                rasterCommitScale={displayRasterScale}
+                onViewportWidthChange={setDocViewportW}
                 onScaleChange={onGestureScaleChange}
                 onScaleSettled={onGestureScaleSettled}
                 touchBridgeRef={touchPanBridgeRef}

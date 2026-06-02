@@ -1031,10 +1031,8 @@ export const InkOverlay = forwardRef<InkOverlayHandle, Props>(function InkOverla
             return;
           }
 
-          if (pinchTouchActive.current) {
-            pinchTouchActive.current = false;
-            bridge.endPinch?.();
-          }
+          pinchTouchActive.current = false;
+          bridge.endPinch?.();
 
           e.currentTarget.setPointerCapture(e.pointerId);
           activeTouchPanId.current = e.pointerId;

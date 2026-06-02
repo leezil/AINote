@@ -41,21 +41,26 @@ export function PdfClientView({
   const { fitWidth } = useFitDocumentWidth({ maxWidthPx, wideMode });
   const renderWidth = computeRenderWidth(fitWidth, committedScale);
   const renderKey = quantizeRenderWidthPx(renderWidth);
-  const sharpening = isDocumentSharpening(viewportScale, committedScale);
+  const sharpening = isDocumentSharpening(viewportScale, committedScale, fitWidth);
   const atMaxRaster = renderWidth >= MAX_PDF_CANVAS_SIDE_PX - 8;
 
   const windowDpr = typeof window !== "undefined" ? window.devicePixelRatio || 1 : 1;
-  const pdfDevicePixelRatio = computePdfDevicePixelRatio(
+  const baseDpr = computePdfDevicePixelRatio(
     committedScale,
     viewportScale,
     windowDpr,
     renderWidth,
   );
+  const [dprFloor, setDprFloor] = useState(baseDpr);
+  const pdfDevicePixelRatio = Math.min(baseDpr, dprFloor);
   const [renderFailed, setRenderFailed] = useState(false);
+  const [renderReady, setRenderReady] = useState(false);
 
   useEffect(() => {
+    setDprFloor(baseDpr);
     setRenderFailed(false);
-  }, [pageNumber, renderKey, fileUrl]);
+    setRenderReady(false);
+  }, [pageNumber, renderKey, fileUrl, baseDpr]);
 
   const file = useMemo(() => ({ url: fileUrl }), [fileUrl]);
 
@@ -91,9 +96,11 @@ export function PdfClientView({
               onPdfLoaded?.(pdf.numPages);
             }}
             loading={
-              <p className="min-h-[36vh] p-8 text-center text-sm text-zinc-500 md:min-h-[320px]">
-                {t("pdf.loading")}
-              </p>
+              renderReady ? null : (
+                <p className="min-h-[36vh] p-8 text-center text-sm text-zinc-500 md:min-h-[320px]">
+                  {t("pdf.loading")}
+                </p>
+              )
             }
             error={<p className="p-4 text-sm text-red-600">{t("pdf.error")}</p>}
           >
@@ -104,8 +111,17 @@ export function PdfClientView({
               devicePixelRatio={pdfDevicePixelRatio}
               renderTextLayer={false}
               renderAnnotationLayer={false}
-              onRenderSuccess={() => setRenderFailed(false)}
-              onRenderError={() => setRenderFailed(true)}
+              onRenderSuccess={() => {
+                setRenderFailed(false);
+                setRenderReady(true);
+              }}
+              onRenderError={() => {
+                if (pdfDevicePixelRatio > 1) {
+                  setDprFloor((d) => Math.max(1, d * 0.5));
+                  return;
+                }
+                setRenderFailed(true);
+              }}
             />
           </Document>
         </div>

@@ -23,11 +23,25 @@ export function computeRenderWidth(fitWidth: number, committedScale: number): nu
   return Math.min(MAX_DOCUMENT_RENDER_PX, quantizeRenderWidthPx(raw));
 }
 
+/** fitWidth 기준 PDF 래스터(선명도) 배율 상한 */
+export function maxRasterScaleForFit(fitWidth: number): number {
+  return MAX_DOCUMENT_RENDER_PX / Math.max(280, fitWidth);
+}
+
+/** 실제 그리는 너비에 대응하는 래스터 배율 (CSS 추가 확대와 분리) */
+export function computeDisplayRasterScale(fitWidth: number, committedScale: number): number {
+  const fit = Math.max(280, fitWidth);
+  return computeRenderWidth(fit, committedScale) / fit;
+}
+
 export function isDocumentSharpening(
   viewportScale: number,
   committedScale: number,
+  fitWidth: number,
 ): boolean {
-  return Math.abs(clampZoomScale(viewportScale) - clampZoomScale(committedScale)) > 0.05;
+  const maxR = maxRasterScaleForFit(fitWidth);
+  const target = Math.min(clampZoomScale(viewportScale), maxR);
+  return Math.abs(clampZoomScale(committedScale) - target) > 0.05;
 }
 
 type FitWidthOptions = {

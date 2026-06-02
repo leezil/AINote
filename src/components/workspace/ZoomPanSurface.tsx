@@ -29,6 +29,8 @@ type Props = {
   panResetKey?: string | number;
   /** InkOverlay에서 손가락 패닝·핀치를 이 객체로 전달 */
   touchBridgeRef?: MutableRefObject<ZoomPanTouchBridge | null> | null;
+  /** 뷰포트 너비 — 래스터 상한·CSS 배율 계산용 */
+  onViewportWidthChange?: (widthPx: number) => void;
   stretchContent?: boolean;
 };
 
@@ -58,6 +60,7 @@ export function ZoomPanSurface({
   viewResetKey,
   panResetKey,
   touchBridgeRef,
+  onViewportWidthChange,
   stretchContent = false,
 }: Props) {
   const { t } = useI18n();
@@ -151,12 +154,29 @@ export function ZoomPanSurface({
     if (!el) return;
     const measure = () => {
       const w = el.clientWidth;
-      if (w >= 64) setViewportWidth(w);
+      if (w >= 64) {
+        setViewportWidth(w);
+        onViewportWidthChange?.(w);
+      }
     };
     const ro = new ResizeObserver(measure);
     ro.observe(el);
     measure();
     return () => ro.disconnect();
+  }, [onViewportWidthChange]);
+
+  useEffect(() => {
+    const el = viewportRef.current;
+    if (!el) return;
+    const blockGesture = (e: Event) => e.preventDefault();
+    el.addEventListener("gesturestart", blockGesture, { passive: false });
+    el.addEventListener("gesturechange", blockGesture, { passive: false });
+    el.addEventListener("gestureend", blockGesture, { passive: false });
+    return () => {
+      el.removeEventListener("gesturestart", blockGesture);
+      el.removeEventListener("gesturechange", blockGesture);
+      el.removeEventListener("gestureend", blockGesture);
+    };
   }, []);
 
   useEffect(() => {
