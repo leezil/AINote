@@ -73,6 +73,8 @@ export function ZoomPanSurface({
   const viewportRef = useRef<HTMLDivElement | null>(null);
   const transformLayerRef = useRef<HTMLDivElement | null>(null);
   const prevRasterCommitRef = useRef(rasterCommitScale);
+  /** 선명도 커밋 시 패닝 보정 — 마지막 확대·축소 손가락/포인터 위치 */
+  const lastZoomFocalRef = useRef<{ x: number; y: number } | null>(null);
   const pointers = useRef<Map<number, ReactPointerEvent<HTMLDivElement>>>(new Map());
   const pinchSession = useRef<PinchSession | null>(null);
   const panDrag = useRef<{ x: number; y: number; px: number; py: number } | null>(null);
@@ -102,6 +104,8 @@ export function ZoomPanSurface({
       }
       const ratio = next / old;
       if (Math.abs(ratio - 1) < 0.0001) return;
+
+      lastZoomFocalRef.current = { x: clientX, y: clientY };
 
       const rect = layer.getBoundingClientRect();
       const fx = clientX - (rect.left + rect.width / 2);
@@ -195,10 +199,10 @@ export function ZoomPanSurface({
     const cssRatio = prev / next;
     if (Math.abs(cssRatio - 1) < 0.02) return;
 
-    const { x: vcx, y: vcy } = viewportCenterClient();
+    const focal = lastZoomFocalRef.current ?? viewportCenterClient();
     const rect = layer.getBoundingClientRect();
-    const fx = vcx - (rect.left + rect.width / 2);
-    const fy = vcy - (rect.top + rect.height / 2);
+    const fx = focal.x - (rect.left + rect.width / 2);
+    const fy = focal.y - (rect.top + rect.height / 2);
 
     setPan((p) => ({
       x: p.x + fx * (1 - cssRatio),
@@ -432,7 +436,7 @@ export function ZoomPanSurface({
       <div
         className={[
           "relative flex h-full min-h-0 w-full touch-none",
-          stretchContent ? "items-stretch justify-center" : "items-center justify-center",
+          stretchContent ? "items-stretch justify-center" : "items-start justify-center",
         ].join(" ")}
       >
         <div

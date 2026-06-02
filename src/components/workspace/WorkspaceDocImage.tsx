@@ -44,6 +44,7 @@ export function WorkspaceDocImage({
     committedScale,
     viewportScale,
     windowDpr,
+    renderWidth,
   );
 
   useEffect(() => {

@@ -88,6 +88,8 @@ const ko = {
   "pdf.loading": "PDF 불러오는 중…",
   "pdf.error": "PDF를 표시할 수 없습니다.",
   "pdf.sharpening": "선명도 맞춤…",
+  "pdf.maxZoomRaster": "최대 선명 해상도 — 더 확대는 화면만 확대됩니다",
+  "pdf.renderFailed": "이 배율에서는 PDF를 그릴 수 없습니다. 조금 축소해 보세요.",
 } as const;
 
 const en: Record<keyof typeof ko, string> = {
@@ -178,6 +180,8 @@ const en: Record<keyof typeof ko, string> = {
   "pdf.loading": "Loading PDF…",
   "pdf.error": "Could not display the PDF.",
   "pdf.sharpening": "Sharpening…",
+  "pdf.maxZoomRaster": "Max sharpness — further zoom is on-screen only",
+  "pdf.renderFailed": "Cannot render PDF at this zoom. Try zooming out slightly.",
 };
 
 export type MessageKey = keyof typeof ko;

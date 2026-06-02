@@ -3,7 +3,8 @@ import { useZoomPanViewportWidth } from "@/components/workspace/ZoomPanViewportW
 
 export const MIN_ZOOM_SCALE = 0.22;
 export const MAX_ZOOM_SCALE = 10;
-export const MAX_DOCUMENT_RENDER_PX = 12_000;
+/** `MAX_PDF_CANVAS_SIDE_PX`와 맞춤 — 초과 시 캔버스 렌더 실패(흰 화면) */
+export const MAX_DOCUMENT_RENDER_PX = 8192;
 /** Page/이미지 재렌더 키 안정화 (px 단위 양자화, 작을수록 단계가 촘촘) */
 export const RENDER_WIDTH_QUANTUM = 8;
 
