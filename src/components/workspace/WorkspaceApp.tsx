@@ -36,8 +36,9 @@ function PdfViewerLoading() {
   return <p className="p-4 text-sm text-zinc-500">{t("pdfViewer.loading")}</p>;
 }
 
-const PdfClientView = dynamic(
-  () => import("@/components/pdf/PdfClientView").then((m) => m.PdfClientView),
+const TiledPdfClientView = dynamic(
+  () =>
+    import("@/components/pdf/TiledPdfClientView").then((m) => m.TiledPdfClientView),
   { ssr: false, loading: PdfViewerLoading },
 );
 
@@ -92,15 +93,6 @@ export function WorkspaceApp() {
   const [aiPanelWidthPx, setAiPanelWidthPx] = useState(380);
   const [isMdUp, setIsMdUp] = useState(false);
   const [docViewportW, setDocViewportW] = useState(960);
-  const docFitWidth = Math.max(280, Math.min(8192, Math.floor(docViewportW)));
-  const maxRasterScale = maxRasterScaleForFit(docFitWidth);
-  const {
-    zoomScale,
-    committedScale,
-    onGestureScaleChange,
-    onGestureScaleSettled,
-  } = useCommittedPdfScale(1, maxRasterScale);
-  const displayRasterScale = computeDisplayRasterScale(docFitWidth, committedScale);
   const [inkColor, setInkColor] = useState("#2563eb");
   const [inkWidth, setInkWidth] = useState(2.8);
   const [eraserRadius, setEraserRadius] = useState(18);
@@ -108,7 +100,6 @@ export function WorkspaceApp() {
 
   const inkLayerActive = Boolean(activeId);
   const inkPointerActive = inkLayerActive;
-  const viewportPdfScale = zoomScale;
 
   useEffect(() => {
     if (!readInkDebugFlag()) return;
@@ -387,6 +378,20 @@ export function WorkspaceApp() {
     () => documents.find((d) => d.id === activeId) ?? null,
     [documents, activeId],
   );
+
+  const docFitWidth = Math.max(280, Math.min(8192, Math.floor(docViewportW)));
+  const activeIsPdf = activeMeta?.kind === "pdf";
+  const maxRasterScale = activeIsPdf ? 10 : maxRasterScaleForFit(docFitWidth);
+  const {
+    zoomScale,
+    committedScale,
+    onGestureScaleChange,
+    onGestureScaleSettled,
+  } = useCommittedPdfScale(1, maxRasterScale);
+  const displayRasterScale = activeIsPdf
+    ? 1
+    : computeDisplayRasterScale(docFitWidth, committedScale);
+  const viewportPdfScale = zoomScale;
 
   const pdfPageTotal =
     activeMeta?.kind === "pdf" && activeMeta.id
@@ -931,6 +936,7 @@ export function WorkspaceApp() {
                 initialScale={zoomScale}
                 rasterCommitScale={displayRasterScale}
                 maxGestureScale={maxRasterScale}
+                layoutZoomMode={activeIsPdf}
                 onViewportWidthChange={setDocViewportW}
                 onScaleChange={onGestureScaleChange}
                 onScaleSettled={onGestureScaleSettled}
@@ -979,14 +985,12 @@ export function WorkspaceApp() {
                               : undefined
                           }
                         >
-                          <PdfClientView
+                          <TiledPdfClientView
                             key={activeMeta.id}
                             fileUrl={fileUrl}
                             pageNumber={currentPage}
                             maxWidthPx={8192}
                             wideMode={viewerFullscreen}
-                            viewportScale={viewportPdfScale}
-                            committedScale={committedScale}
                             onPdfLoaded={(n) => {
                               setPdfNumPagesByDoc((prev) => ({
                                 ...prev,

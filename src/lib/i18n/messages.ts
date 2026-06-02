@@ -90,6 +90,7 @@ const ko = {
   "pdf.sharpening": "선명도 맞춤…",
   "pdf.maxZoomRaster": "최대 확대",
   "pdf.renderFailed": "이 배율에서는 PDF를 그릴 수 없습니다. 조금 축소해 보세요.",
+  "pdf.tiledView": "고해상도 타일",
 } as const;
 
 const en: Record<keyof typeof ko, string> = {
@@ -182,6 +183,7 @@ const en: Record<keyof typeof ko, string> = {
   "pdf.sharpening": "Sharpening…",
   "pdf.maxZoomRaster": "Maximum zoom",
   "pdf.renderFailed": "Cannot render PDF at this zoom. Try zooming out slightly.",
+  "pdf.tiledView": "Hi-res tiles",
 };
 
 export type MessageKey = keyof typeof ko;

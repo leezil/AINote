@@ -13,6 +13,10 @@ import {
 } from "react";
 import type { ZoomPanTouchBridge } from "@/components/ink/InkOverlay";
 import { ZoomPanViewportWidthContext } from "@/components/workspace/ZoomPanViewportWidthContext";
+import {
+  ZoomPanTransformContext,
+  type ZoomPanTransform,
+} from "@/components/workspace/ZoomPanTransformContext";
 import { prefersTouchGestureNavigation } from "@/lib/device/ink-input-profile";
 
 type Props = {
@@ -33,6 +37,8 @@ type Props = {
   onViewportWidthChange?: (widthPx: number) => void;
   /** 제스처 확대 상한(래스터 한도). 초과 시 확대 불가 — 흰 화면·CSS 과확대 방지 */
   maxGestureScale?: number;
+  /** true: CSS scale 없이 문서 레이아웃 크기로 확대(타일 PDF) */
+  layoutZoomMode?: boolean;
   stretchContent?: boolean;
 };
 
@@ -64,11 +70,13 @@ export function ZoomPanSurface({
   touchBridgeRef,
   onViewportWidthChange,
   maxGestureScale,
+  layoutZoomMode = false,
   stretchContent = false,
 }: Props) {
   const { t } = useI18n();
   const [scale, setScale] = useState(() => initialScale ?? 1);
   const [viewportWidth, setViewportWidth] = useState(960);
+  const [viewportHeight, setViewportHeight] = useState(600);
   const [pan, setPan] = useState({ x: 0, y: 0 });
   const scaleRef = useRef(scale);
   scaleRef.current = scale;
@@ -107,7 +115,9 @@ export function ZoomPanSurface({
     onScaleSettled?.(s);
   }, [onScaleSettled]);
 
-  const cssScaleFactor = scale / Math.max(0.01, rasterCommitScale);
+  const cssScaleFactor = layoutZoomMode
+    ? 1
+    : scale / Math.max(0.01, rasterCommitScale);
 
   const applyZoomAtClient = useCallback(
     (newScale: number, clientX: number, clientY: number) => {
@@ -124,8 +134,12 @@ export function ZoomPanSurface({
       lastZoomFocalRef.current = { x: clientX, y: clientY };
 
       const rect = layer.getBoundingClientRect();
-      const fx = clientX - (rect.left + rect.width / 2);
-      const fy = clientY - (rect.top + rect.height / 2);
+      const fx = layoutZoomMode
+        ? clientX - rect.left
+        : clientX - (rect.left + rect.width / 2);
+      const fy = layoutZoomMode
+        ? clientY - rect.top
+        : clientY - (rect.top + rect.height / 2);
 
       setPan((p) => ({
         x: p.x + fx * (1 - ratio),
@@ -133,7 +147,7 @@ export function ZoomPanSurface({
       }));
       setScale(next);
     },
-    [clampScale],
+    [clampScale, layoutZoomMode],
   );
 
   const viewportCenterClient = useCallback((): { x: number; y: number } => {
@@ -167,10 +181,12 @@ export function ZoomPanSurface({
     if (!el) return;
     const measure = () => {
       const w = el.clientWidth;
+      const h = el.clientHeight;
       if (w >= 64) {
         setViewportWidth(w);
         onViewportWidthChange?.(w);
       }
+      if (h >= 64) setViewportHeight(h);
     };
     const ro = new ResizeObserver(measure);
     ro.observe(el);
@@ -221,6 +237,7 @@ export function ZoomPanSurface({
 
   /** 선명도 커밋 시 레이아웃이 바뀌어도 화면 중앙이 튀지 않도록 패닝 보정 */
   useLayoutEffect(() => {
+    if (layoutZoomMode) return;
     const prev = prevRasterCommitRef.current;
     const next = rasterCommitScale;
     prevRasterCommitRef.current = next;
@@ -241,7 +258,15 @@ export function ZoomPanSurface({
       x: p.x + fx * (1 - cssRatio),
       y: p.y + fy * (1 - cssRatio),
     }));
-  }, [rasterCommitScale, viewportCenterClient]);
+  }, [rasterCommitScale, viewportCenterClient, layoutZoomMode]);
+
+  const transformSnapshot: ZoomPanTransform = {
+    scale,
+    panX: pan.x,
+    panY: pan.y,
+    viewportWidth,
+    viewportHeight,
+  };
 
   useEffect(() => {
     if (!touchBridgeRef) return;
@@ -427,6 +452,7 @@ export function ZoomPanSurface({
   };
 
   return (
+    <ZoomPanTransformContext.Provider value={transformSnapshot}>
     <ZoomPanViewportWidthContext.Provider value={viewportWidth}>
     <div
       ref={viewportRef}
@@ -485,7 +511,7 @@ export function ZoomPanSurface({
             .join(" ")}
           style={{
             transform: `translate(${pan.x}px, ${pan.y}px) scale(${cssScaleFactor})`,
-            transformOrigin: "center center",
+            transformOrigin: layoutZoomMode ? "0 0" : "center center",
             backfaceVisibility: "hidden",
             WebkitBackfaceVisibility: "hidden" as const,
           }}
@@ -507,5 +533,6 @@ export function ZoomPanSurface({
       </div>
     </div>
     </ZoomPanViewportWidthContext.Provider>
+    </ZoomPanTransformContext.Provider>
   );
 }
