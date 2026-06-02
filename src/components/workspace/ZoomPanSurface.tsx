@@ -31,6 +31,8 @@ type Props = {
   touchBridgeRef?: MutableRefObject<ZoomPanTouchBridge | null> | null;
   /** 뷰포트 너비 — 래스터 상한·CSS 배율 계산용 */
   onViewportWidthChange?: (widthPx: number) => void;
+  /** 제스처 확대 상한(래스터 한도). 초과 시 확대 불가 — 흰 화면·CSS 과확대 방지 */
+  maxGestureScale?: number;
   stretchContent?: boolean;
 };
 
@@ -61,6 +63,7 @@ export function ZoomPanSurface({
   panResetKey,
   touchBridgeRef,
   onViewportWidthChange,
+  maxGestureScale,
   stretchContent = false,
 }: Props) {
   const { t } = useI18n();
@@ -82,7 +85,17 @@ export function ZoomPanSurface({
   const pinchSession = useRef<PinchSession | null>(null);
   const panDrag = useRef<{ x: number; y: number; px: number; py: number } | null>(null);
 
-  const clampScale = useCallback((s: number) => Math.min(MAX_SCALE, Math.max(MIN_SCALE, s)), []);
+  const gestureMaxRef = useRef(maxGestureScale ?? MAX_SCALE);
+  gestureMaxRef.current = maxGestureScale ?? MAX_SCALE;
+
+  const clampScale = useCallback((s: number) => {
+    const cap = Math.min(MAX_SCALE, gestureMaxRef.current);
+    return Math.max(MIN_SCALE, Math.min(cap, s));
+  }, []);
+
+  useEffect(() => {
+    setScale((s) => clampScale(s));
+  }, [maxGestureScale, clampScale]);
 
   const lastSettledScaleRef = useRef(scale);
   const wheelSettleTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);

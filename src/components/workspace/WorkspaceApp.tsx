@@ -930,6 +930,7 @@ export function WorkspaceApp() {
                 className={viewerFullscreen ? "h-full min-h-0" : "min-h-[320px]"}
                 initialScale={zoomScale}
                 rasterCommitScale={displayRasterScale}
+                maxGestureScale={maxRasterScale}
                 onViewportWidthChange={setDocViewportW}
                 onScaleChange={onGestureScaleChange}
                 onScaleSettled={onGestureScaleSettled}

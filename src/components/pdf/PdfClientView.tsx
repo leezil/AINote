@@ -9,6 +9,7 @@ import "react-pdf/dist/Page/TextLayer.css";
 import {
   computeRenderWidth,
   isDocumentSharpening,
+  maxRasterScaleForFit,
   quantizeRenderWidthPx,
   useFitDocumentWidth,
 } from "@/lib/documents/zoomable-document";
@@ -44,7 +45,8 @@ export function PdfClientView({
   const renderWidth = computeRenderWidth(fitWidth, committedScale);
   const renderKey = quantizeRenderWidthPx(renderWidth);
   const sharpening = isDocumentSharpening(viewportScale, committedScale, fitWidth);
-  const atMaxRaster = renderWidth >= MAX_PDF_CANVAS_SIDE_PX - 8;
+  const atMaxZoom =
+    !sharpening && committedScale >= maxRasterScaleForFit(fitWidth) - 0.04;
 
   const [pageAspect, setPageAspect] = useState(PDF_PAGE_ASPECT_HEIGHT);
   const renderHeight = Math.max(200, Math.round(renderWidth * pageAspect));
@@ -91,7 +93,7 @@ export function PdfClientView({
           {t("pdf.sharpening")}
         </span>
       ) : null}
-      {atMaxRaster ? (
+      {atMaxZoom ? (
         <span className="pointer-events-none absolute left-1 top-1 z-10 max-w-[90%] rounded bg-amber-900/75 px-1.5 py-0.5 text-[10px] text-amber-50">
           {t("pdf.maxZoomRaster")}
         </span>

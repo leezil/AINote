@@ -59,31 +59,48 @@ export function useCommittedPdfScale(initial = 1, maxRasterScale = 10) {
     [applyCommitted],
   );
 
+  const capGestureScale = useCallback((s: number) => {
+    return clampZoomScale(Math.min(s, maxRasterRef.current));
+  }, []);
+
   const onGestureScaleChange = useCallback(
     (s: number) => {
-      setZoomScale(clampZoomScale(s));
-      scheduleCommitted(s);
+      const next = capGestureScale(s);
+      setZoomScale(next);
+      scheduleCommitted(next);
     },
-    [scheduleCommitted],
+    [capGestureScale, scheduleCommitted],
   );
 
   const onGestureScaleSettled = useCallback(
     (s: number) => {
-      const next = clampZoomScale(s);
+      const next = capGestureScale(s);
       setZoomScale(next);
       flushCommitted(next);
     },
-    [flushCommitted],
+    [capGestureScale, flushCommitted],
   );
 
   const resetScales = useCallback(
     (s = 1) => {
-      const next = clampZoomScale(s);
+      const next = capGestureScale(s);
       flushCommitted(next);
       setZoomScale(next);
     },
-    [flushCommitted],
+    [capGestureScale, flushCommitted],
   );
+
+  useEffect(() => {
+    const cap = maxRasterScale;
+    setZoomScale((z) => {
+      const next = clampZoomScale(Math.min(z, cap));
+      return next;
+    });
+    if (committedRef.current > cap) {
+      committedRef.current = cap;
+      setCommittedScale(cap);
+    }
+  }, [maxRasterScale]);
 
   useEffect(() => {
     return () => {
